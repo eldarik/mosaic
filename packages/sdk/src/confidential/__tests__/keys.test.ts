@@ -3,6 +3,7 @@ import { generateKeyPairSigner } from '@solana/kit';
 import { ElGamalKeypair, AeKey } from '@solana/zk-sdk/node';
 import {
     deriveConfidentialKeys,
+    deriveConfidentialKeysForOwnerMint,
     createKeyPairMessageSigner,
     freeConfidentialKeys,
     decryptAesBalance,
@@ -13,6 +14,8 @@ import {
 // Uses the real @solana/zk-sdk WASM (verified to load under ts-jest ESM).
 const TOKEN_ACCOUNT_A = 'sAPDrViGV3C6PaT4xD7uRDDvB4xCURfZzDkGEd8Yv4v' as Address;
 const TOKEN_ACCOUNT_B = 'HA3KcFsXNjRJsRZq1P1Y8qPAeSZnZsFyauCDEsSSGqTj' as Address;
+const MINT_A = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as Address;
+const MINT_B = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' as Address;
 
 describe('deriveConfidentialKeys', () => {
     let signMessage: SignMessage;
@@ -64,6 +67,40 @@ describe('deriveConfidentialKeys', () => {
 
     it('throws when neither signMessage nor both key overrides are provided', async () => {
         await expect(deriveConfidentialKeys({ tokenAccount: TOKEN_ACCOUNT_A })).rejects.toThrow(/signMessage/);
+    });
+});
+
+describe('deriveConfidentialKeysForOwnerMint', () => {
+    it('is deterministic: same signer + owner + mint yields the same keys', async () => {
+        const signer = await generateKeyPairSigner();
+        const a = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
+        const b = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
+
+        expect(a.elgamal.pubkey().toBytes()).toEqual(b.elgamal.pubkey().toBytes());
+        expect(a.aes.toBytes()).toEqual(b.aes.toBytes());
+
+        freeConfidentialKeys(a);
+        freeConfidentialKeys(b);
+    });
+
+    it('binds keys to the (owner, mint) pair: a different mint yields different keys', async () => {
+        const signer = await generateKeyPairSigner();
+        const a = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
+        const b = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_B });
+
+        expect(a.elgamal.pubkey().toBytes()).not.toEqual(b.elgamal.pubkey().toBytes());
+        expect(a.aes.toBytes()).not.toEqual(b.aes.toBytes());
+
+        freeConfidentialKeys(a);
+        freeConfidentialKeys(b);
+    });
+
+    it('produces usable keys (AES round-trip)', async () => {
+        const signer = await generateKeyPairSigner();
+        const keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
+        const ciphertext = new Uint8Array(keys.aes.encrypt(7_777n).toBytes());
+        expect(decryptAesBalance(keys.aes, ciphertext)).toBe(7_777n);
+        freeConfidentialKeys(keys);
     });
 });
 

@@ -1,4 +1,5 @@
-import { type Address, getAddressEncoder, signBytes } from '@solana/kit';
+import { type Address, type MessagePartialSigner, getAddressEncoder, signBytes } from '@solana/kit';
+import { deriveAeKeyForOwnerMint, deriveElGamalKeypairForOwnerMint } from '@solana-program/token-2022';
 import { ElGamalKeypair, AeKey, ElGamalSecretKey, ElGamalCiphertext, AeCiphertext } from '@solana/zk-sdk/node';
 
 /**
@@ -83,8 +84,52 @@ export async function deriveConfidentialKeys(input: DeriveConfidentialKeysInput)
     // The token account address is the public seed (32 bytes).
     const seed = new Uint8Array(getAddressEncoder().encode(tokenAccount));
 
-    const elgamal = elgamalKeypair ?? ElGamalKeypair.fromSignature(await signMessage(ElGamalSecretKey.signerMessage(seed)));
+    const elgamal =
+        elgamalKeypair ?? ElGamalKeypair.fromSignature(await signMessage(ElGamalSecretKey.signerMessage(seed)));
     const aes = aesKey ?? AeKey.fromSignature(await signMessage(AeKey.signerMessage(seed)));
+
+    return { elgamal, aes };
+}
+
+export interface DeriveConfidentialKeysForOwnerMintInput {
+    /**
+     * Signs the canonical derivation messages. A kit `KeyPairSigner` satisfies
+     * `MessagePartialSigner`; in the browser, wrap the wallet adapter.
+     */
+    signer: MessagePartialSigner;
+    /** The token account owner the keys are bound to. */
+    owner: Address;
+    /** The mint the keys are bound to. */
+    mint: Address;
+}
+
+/**
+ * Derives the ElGamal keypair and AES key for a confidential token account using
+ * the official Token-2022 `(owner, mint)`-bound derivation
+ * (`deriveElGamalKeypairForOwnerMint` / `deriveAeKeyForOwnerMint`), then
+ * reconstructs the `@solana/zk-sdk` WASM objects the operation helpers consume.
+ *
+ * Binding to `(owner, mint)` (rather than the token account address) keeps the
+ * keys stable across closing and reopening the token account and prevents key
+ * reuse across mints. Derivation is deterministic and requires no storage.
+ *
+ * ⚠️ The returned keys own WASM memory — free them with {@link freeConfidentialKeys}.
+ */
+export async function deriveConfidentialKeysForOwnerMint(
+    input: DeriveConfidentialKeysForOwnerMintInput,
+): Promise<ConfidentialKeys> {
+    const { signer, owner, mint } = input;
+
+    const [derivedElGamal, aesBytes] = await Promise.all([
+        deriveElGamalKeypairForOwnerMint({ signer, owner, mint }),
+        deriveAeKeyForOwnerMint({ signer, owner, mint }),
+    ]);
+
+    // `fromSecretKey` consumes the secret-key WASM object (by value), so it must
+    // not be freed afterwards.
+    const secret = ElGamalSecretKey.fromBytes(new Uint8Array(derivedElGamal.secretKey));
+    const elgamal = ElGamalKeypair.fromSecretKey(secret);
+    const aes = AeKey.fromBytes(new Uint8Array(aesBytes));
 
     return { elgamal, aes };
 }

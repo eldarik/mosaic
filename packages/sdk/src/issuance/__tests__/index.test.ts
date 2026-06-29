@@ -119,6 +119,36 @@ describe('Token', () => {
             expect(extension.autoApproveNewAccounts).toBe(false);
             expect(extension.auditorElgamalPubkey).toBe(null);
         });
+
+        it('should default to manual-approve (whitelist) when given options without a policy', () => {
+            token.withConfidentialBalances({ authority: TEST_AUTHORITY });
+
+            const extension: any = token.getExtensions()[0];
+            expect(extension.autoApproveNewAccounts).toBe(false);
+            expect(extension.auditorElgamalPubkey).toBe(null);
+        });
+
+        it('should set autoApproveNewAccounts=true for the auto-approve (opt-in) policy', () => {
+            token.withConfidentialBalances({ authority: TEST_AUTHORITY, policy: 'auto-approve' });
+
+            const extension: any = token.getExtensions()[0];
+            expect(extension.autoApproveNewAccounts).toBe(true);
+        });
+
+        it('should set autoApproveNewAccounts=false for the manual-approve (whitelist) policy', () => {
+            token.withConfidentialBalances({ authority: TEST_AUTHORITY, policy: 'manual-approve' });
+
+            const extension: any = token.getExtensions()[0];
+            expect(extension.autoApproveNewAccounts).toBe(false);
+        });
+
+        it('should encode the auditor ElGamal pubkey as Some when provided', () => {
+            const auditor = generateMockAddress() as Address;
+            token.withConfidentialBalances({ authority: TEST_AUTHORITY, auditorElgamalPubkey: auditor });
+
+            const extension: any = token.getExtensions()[0];
+            expect(extension.auditorElgamalPubkey).toEqual({ __option: 'Some', value: auditor });
+        });
     });
 
     describe('withConfidentialTransferFee', () => {
