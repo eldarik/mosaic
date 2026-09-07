@@ -100,7 +100,12 @@ describe('createResilientSignMessage', () => {
     });
 
     it('falls back when the Wallet Standard result shape is unrecognised', async () => {
-        setWallets([fakeWallet(OWNER, jest.fn(async () => ({})))]);
+        setWallets([
+            fakeWallet(
+                OWNER,
+                jest.fn(async () => ({})),
+            ),
+        ]);
         const fallbackSignature = new Uint8Array([2]);
         const fallback = jest.fn(async () => fallbackSignature);
 
@@ -132,11 +137,14 @@ describe('signMessageViaWalletStandard: signature shape normalization', () => {
     });
 
     it('rejects an unrecognised result shape', async () => {
-        setWallets([fakeWallet(OWNER, jest.fn(async () => ({})))]);
+        setWallets([
+            fakeWallet(
+                OWNER,
+                jest.fn(async () => ({})),
+            ),
+        ]);
 
-        await expect(signMessageViaWalletStandard(OWNER, MESSAGE)).rejects.toThrow(
-            /unrecognised signMessage result/,
-        );
+        await expect(signMessageViaWalletStandard(OWNER, MESSAGE)).rejects.toThrow(/unrecognised signMessage result/);
     });
 });
 
