@@ -20,6 +20,11 @@ const MESSAGE = ElGamalSecretKey.signerMessage(new Uint8Array([1, 2, 3]));
 const ARBITRARY_MESSAGE = new Uint8Array([1, 2, 3]);
 const MINT_A = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as Address;
 
+/** A well-formed (64-byte) detached Ed25519 signature, distinguishable by its fill value. */
+function fakeSignature(fill: number): Uint8Array {
+    return new Uint8Array(64).fill(fill);
+}
+
 /** Registers `wallets` as what the mocked `@wallet-standard/core` registry returns. */
 function setWallets(wallets: unknown[]): void {
     mockGetWallets.mockReturnValue({ get: () => wallets });
@@ -47,7 +52,7 @@ beforeEach(() => {
 
 describe('createResilientSignMessage', () => {
     it('signs via the Wallet Standard registry when a matching wallet is found', async () => {
-        const signature = new Uint8Array([9, 9, 9]);
+        const signature = fakeSignature(9);
         const signMessage = jest.fn(async () => [{ signedMessage: MESSAGE, signature }]);
         setWallets([fakeWallet(OWNER, signMessage)]);
         const fallback = jest.fn();
@@ -64,7 +69,7 @@ describe('createResilientSignMessage', () => {
 
     it('falls back when no wallet in the registry can sign for the owner', async () => {
         setWallets([fakeWallet('SOME_OTHER_ADDRESS', jest.fn())]);
-        const fallbackSignature = new Uint8Array([5]);
+        const fallbackSignature = fakeSignature(5);
         const fallback = jest.fn(async () => fallbackSignature);
 
         const result = await resilientOrThrow(OWNER, fallback)(MESSAGE);
@@ -82,7 +87,7 @@ describe('createResilientSignMessage', () => {
             throw new Error('malformed request');
         });
         setWallets([fakeWallet(OWNER, signMessage)]);
-        const fallbackSignature = new Uint8Array([7]);
+        const fallbackSignature = fakeSignature(7);
         const fallback = jest.fn(async () => fallbackSignature);
 
         const result = await resilientOrThrow(OWNER, fallback)(MESSAGE);
@@ -111,7 +116,30 @@ describe('createResilientSignMessage', () => {
                 jest.fn(async () => ({})),
             ),
         ]);
-        const fallbackSignature = new Uint8Array([2]);
+        const fallbackSignature = fakeSignature(2);
+        const fallback = jest.fn(async () => fallbackSignature);
+
+        const result = await resilientOrThrow(OWNER, fallback)(MESSAGE);
+
+        expect(result).toEqual(fallbackSignature);
+    });
+
+    it('falls back when the registry signer returns a signedMessage that does not match the requested bytes', async () => {
+        const signature = fakeSignature(3);
+        const signMessage = jest.fn(async () => [{ signedMessage: new Uint8Array([...MESSAGE, 0xff]), signature }]);
+        setWallets([fakeWallet(OWNER, signMessage)]);
+        const fallbackSignature = fakeSignature(4);
+        const fallback = jest.fn(async () => fallbackSignature);
+
+        const result = await resilientOrThrow(OWNER, fallback)(MESSAGE);
+
+        expect(result).toEqual(fallbackSignature);
+    });
+
+    it('falls back when the registry signer returns a signature of the wrong length', async () => {
+        const signMessage = jest.fn(async () => [{ signedMessage: MESSAGE, signature: new Uint8Array([1, 2, 3]) }]);
+        setWallets([fakeWallet(OWNER, signMessage)]);
+        const fallbackSignature = fakeSignature(6);
         const fallback = jest.fn(async () => fallbackSignature);
 
         const result = await resilientOrThrow(OWNER, fallback)(MESSAGE);
@@ -137,7 +165,7 @@ describe('createResilientSignMessage', () => {
 });
 
 describe('signMessageViaWalletStandard: signature shape normalization', () => {
-    const signature = new Uint8Array([1, 2, 3, 4]);
+    const signature = fakeSignature(1);
 
     const shapes: [string, () => Promise<unknown>][] = [
         ['a bare Uint8Array', async () => signature],
@@ -163,11 +191,33 @@ describe('signMessageViaWalletStandard: signature shape normalization', () => {
 
         await expect(signMessageViaWalletStandard(OWNER, MESSAGE)).rejects.toThrow(/unrecognised signMessage result/);
     });
+
+    it('rejects a signedMessage that does not match the requested bytes', async () => {
+        setWallets([
+            fakeWallet(
+                OWNER,
+                jest.fn(async () => [{ signedMessage: new Uint8Array([...MESSAGE, 0xff]), signature }]),
+            ),
+        ]);
+
+        await expect(signMessageViaWalletStandard(OWNER, MESSAGE)).rejects.toThrow(/unrecognised signMessage result/);
+    });
+
+    it('rejects a signature that is not a valid detached Ed25519 length', async () => {
+        setWallets([
+            fakeWallet(
+                OWNER,
+                jest.fn(async () => [{ signedMessage: MESSAGE, signature: new Uint8Array([1, 2, 3]) }]),
+            ),
+        ]);
+
+        await expect(signMessageViaWalletStandard(OWNER, MESSAGE)).rejects.toThrow(/unrecognised signMessage result/);
+    });
 });
 
 describe('signMessageViaWalletStandard: canonical message enforcement', () => {
     it('accepts an AeKey derivation message alongside an ElGamal one', async () => {
-        const signature = new Uint8Array([9]);
+        const signature = fakeSignature(9);
         const aeMessage = AeKey.signerMessage(new Uint8Array([1, 2, 3]));
         setWallets([
             fakeWallet(

@@ -45,21 +45,44 @@ interface SolanaSignMessageFeature {
     }) => Promise<readonly SolanaSignMessageOutput[] | SolanaSignMessageOutput | Uint8Array>;
 }
 
+/** The byte length of a detached Ed25519 signature. */
+const ED25519_SIGNATURE_LENGTH = 64;
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
+
 /**
  * Pull the raw signature bytes out of the several shapes wallets return:
  * bare bytes, Wallet Standard's `[{ signedMessage, signature }]`, or a single
  * `{ signature }`. Returns undefined rather than throwing, because a caller may
  * need to treat "no usable signature" as a reason to try another path.
+ *
+ * Rejects (returns undefined for) a signature that isn't a valid detached
+ * Ed25519 signature length, and rejects a `signedMessage` that doesn't
+ * byte-match the requested `message` — a wallet that hashes or prefixes the
+ * message before signing would otherwise have its signature silently
+ * accepted, deriving confidential keys incompatible with a raw-message signer
+ * for the same owner and mint.
  */
-function toSignatureBytes(result: unknown): Uint8Array | undefined {
-    if (result instanceof Uint8Array) return result;
-    if (Array.isArray(result)) return toSignatureBytes(result[0]);
-    const signature = (result as { signature?: unknown } | null)?.signature;
-    return signature instanceof Uint8Array ? signature : undefined;
+function toSignatureBytes(result: unknown, message: Uint8Array): Uint8Array | undefined {
+    if (result instanceof Uint8Array) {
+        return result.length === ED25519_SIGNATURE_LENGTH ? result : undefined;
+    }
+    if (Array.isArray(result)) return toSignatureBytes(result[0], message);
+
+    const { signedMessage, signature } = (result as { signedMessage?: unknown; signature?: unknown } | null) ?? {};
+    if (!(signature instanceof Uint8Array) || signature.length !== ED25519_SIGNATURE_LENGTH) return undefined;
+    if (signedMessage instanceof Uint8Array && !bytesEqual(signedMessage, message)) return undefined;
+    return signature;
 }
 
-function extractSignature(result: unknown): Uint8Array {
-    const signature = toSignatureBytes(result);
+function extractSignature(result: unknown, message: Uint8Array): Uint8Array {
+    const signature = toSignatureBytes(result, message);
     if (!signature) throw new Error('The wallet returned an unrecognised signMessage result.');
     return signature;
 }
@@ -128,7 +151,7 @@ export async function signMessageViaWalletStandard(owner: Address, message: Uint
         const feature = wallet.features['solana:signMessage'] as SolanaSignMessageFeature | undefined;
         const account = wallet.accounts.find(candidate => candidate.address === owner);
         if (typeof feature?.signMessage === 'function' && account) {
-            return extractSignature(await feature.signMessage({ account, message }));
+            return extractSignature(await feature.signMessage({ account, message }), message);
         }
     }
 
@@ -189,7 +212,7 @@ export function createResilientSignMessage(
             if (isSignerRejection(err) || !fallback) throw err;
             // Last resort. Its result is validated because the fallback can
             // resolve with `undefined` instead of failing.
-            const signature = toSignatureBytes(await fallback(message));
+            const signature = toSignatureBytes(await fallback(message), message);
             if (!signature) throw err;
             return signature;
         }
