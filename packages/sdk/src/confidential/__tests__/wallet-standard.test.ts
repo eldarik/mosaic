@@ -5,6 +5,7 @@ jest.mock('@wallet-standard/core', () => ({
 import type { Address } from '@solana/kit';
 import { createSignableMessage, generateKeyPairSigner } from '@solana/kit';
 import { getWallets } from '@wallet-standard/core';
+import { AeKey, ElGamalSecretKey } from '@solana/zk-sdk/node';
 import { createKeyPairMessageSigner, deriveConfidentialKeysForOwnerMint, freeConfidentialKeys } from '../keys.js';
 import { createMessageSigner, createResilientSignMessage, signMessageViaWalletStandard } from '../wallet-standard.js';
 import type { SignMessage } from '../keys.js';
@@ -12,7 +13,11 @@ import type { SignMessage } from '../keys.js';
 const mockGetWallets = getWallets as jest.Mock;
 
 const OWNER = 'FAKE_OWNER_ADDRESS' as Address;
-const MESSAGE = new Uint8Array([1, 2, 3]);
+// A realistic canonical key-derivation message (arbitrary seed — these tests
+// don't care which scheme produced it, only that it carries a recognised
+// domain separator).
+const MESSAGE = ElGamalSecretKey.signerMessage(new Uint8Array([1, 2, 3]));
+const ARBITRARY_MESSAGE = new Uint8Array([1, 2, 3]);
 const MINT_A = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as Address;
 
 /** Registers `wallets` as what the mocked `@wallet-standard/core` registry returns. */
@@ -117,6 +122,18 @@ describe('createResilientSignMessage', () => {
     it('returns undefined synchronously when there is no owner', () => {
         expect(createResilientSignMessage(undefined, jest.fn())).toBeUndefined();
     });
+
+    it('rejects an arbitrary non-derivation message without touching the wallet or the fallback', async () => {
+        const signMessage = jest.fn();
+        setWallets([fakeWallet(OWNER, signMessage)]);
+        const fallback = jest.fn();
+
+        await expect(resilientOrThrow(OWNER, fallback)(ARBITRARY_MESSAGE)).rejects.toThrow(
+            /confidential-balance key-derivation/,
+        );
+        expect(signMessage).not.toHaveBeenCalled();
+        expect(fallback).not.toHaveBeenCalled();
+    });
 });
 
 describe('signMessageViaWalletStandard: signature shape normalization', () => {
@@ -145,6 +162,33 @@ describe('signMessageViaWalletStandard: signature shape normalization', () => {
         ]);
 
         await expect(signMessageViaWalletStandard(OWNER, MESSAGE)).rejects.toThrow(/unrecognised signMessage result/);
+    });
+});
+
+describe('signMessageViaWalletStandard: canonical message enforcement', () => {
+    it('accepts an AeKey derivation message alongside an ElGamal one', async () => {
+        const signature = new Uint8Array([9]);
+        const aeMessage = AeKey.signerMessage(new Uint8Array([1, 2, 3]));
+        setWallets([
+            fakeWallet(
+                OWNER,
+                jest.fn(async () => signature),
+            ),
+        ]);
+
+        const result = await signMessageViaWalletStandard(OWNER, aeMessage);
+
+        expect(result).toEqual(signature);
+    });
+
+    it('refuses to sign an arbitrary message, without ever calling the wallet', async () => {
+        const signMessage = jest.fn();
+        setWallets([fakeWallet(OWNER, signMessage)]);
+
+        await expect(signMessageViaWalletStandard(OWNER, ARBITRARY_MESSAGE)).rejects.toThrow(
+            /confidential-balance key-derivation/,
+        );
+        expect(signMessage).not.toHaveBeenCalled();
     });
 });
 

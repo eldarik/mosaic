@@ -1,7 +1,7 @@
 import type { Address, MessagePartialSigner, SignableMessage, SignatureBytes } from '@solana/kit';
 import { getWallets } from '@wallet-standard/core';
+import { AeKey, ElGamalSecretKey } from '@solana/mosaic-sdk/_zk';
 import type { SignMessage } from './keys.js';
-import { isSignerRejection } from './rejection.js';
 
 /**
  * The confidential key derivation (`deriveConfidentialKeysForOwnerMint` /
@@ -65,6 +65,53 @@ function extractSignature(result: unknown): Uint8Array {
 }
 
 /**
+ * Did the user dismiss the wallet prompt, rather than the signer refusing the
+ * message outright? A cancellation must not be reported as an incompatibility.
+ */
+function isSignerRejection(error: unknown): boolean {
+    if ((error as { code?: unknown } | null)?.code === 4001) return true;
+    return /reject|denied|declin|cancel/i.test(describeError(error));
+}
+
+function describeError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error ?? 'unknown error');
+}
+
+// `ElGamalSecretKey.signerMessage(seed)` / `AeKey.signerMessage(seed)` are always
+// `domainSeparator + seed`; calling them with an empty seed yields the bare
+// domain separator, which every canonical key-derivation message must start
+// with regardless of what seed (token account, owner, owner+mint, ...) is in
+// use. This lets `assertCanonicalDerivationMessage` recognise a real
+// derivation message without hard-coding — or needing to agree with upstream
+// on — the seed scheme itself.
+const ELGAMAL_MESSAGE_PREFIX = ElGamalSecretKey.signerMessage(new Uint8Array(0));
+const AE_MESSAGE_PREFIX = AeKey.signerMessage(new Uint8Array(0));
+
+function hasPrefix(message: Uint8Array, prefix: Uint8Array): boolean {
+    if (message.length < prefix.length) return false;
+    for (let i = 0; i < prefix.length; i++) {
+        if (message[i] !== prefix[i]) return false;
+    }
+    return true;
+}
+
+/**
+ * This module exists only to sign confidential-balance key-derivation
+ * messages (see `deriveConfidentialKeys` / `deriveConfidentialKeysForOwnerMint`
+ * in `./keys.js`) — not to be a general-purpose "sign anything via Wallet
+ * Standard" utility. Refuses anything that isn't one, so a caller can't be
+ * tricked (or accidentally used) into blind-signing an arbitrary message
+ * under the `confidential/` banner.
+ */
+function assertCanonicalDerivationMessage(message: Uint8Array): void {
+    if (hasPrefix(message, ELGAMAL_MESSAGE_PREFIX) || hasPrefix(message, AE_MESSAGE_PREFIX)) return;
+    throw new Error(
+        'signMessageViaWalletStandard only signs confidential-balance key-derivation messages; ' +
+            'refusing to sign an unrecognised message.',
+    );
+}
+
+/**
  * Signs `message` by going straight to the browser's Wallet Standard registry
  * (`@wallet-standard/core`'s `getWallets()`), independently of whatever
  * higher-level wallet-connection framework an app uses.
@@ -74,6 +121,7 @@ function extractSignature(result: unknown): Uint8Array {
  * path loses access to one or both (see {@link createResilientSignMessage}).
  */
 export async function signMessageViaWalletStandard(owner: Address, message: Uint8Array): Promise<Uint8Array> {
+    assertCanonicalDerivationMessage(message);
     const wallets = getWallets().get();
 
     for (const wallet of wallets) {
@@ -134,6 +182,7 @@ export function createResilientSignMessage(
     if (!owner) return undefined;
 
     return async (message: Uint8Array): Promise<Uint8Array> => {
+        assertCanonicalDerivationMessage(message);
         try {
             return await signMessageViaWalletStandard(owner, message);
         } catch (err) {
