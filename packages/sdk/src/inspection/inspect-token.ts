@@ -25,13 +25,7 @@ const ARCADE_TOKEN_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultA
 
 const TOKENIZED_SECURITY_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'PausableConfig'];
 
-const MMF_EXTENSIONS = [
-    'TokenMetadata',
-    'PermanentDelegate',
-    'DefaultAccountState',
-    'TransferHook',
-    'PausableConfig',
-];
+const MMF_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'TransferHook', 'PausableConfig'];
 
 export const TOKEN_TYPE_LABELS: Record<TokenType, string> = {
     stablecoin: 'Stablecoin',
