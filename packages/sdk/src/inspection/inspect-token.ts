@@ -13,13 +13,33 @@ import type {
 } from './types.js';
 import { TOKEN_ACL_PROGRAM_ID } from '../token-acl/index.js';
 
-const STABLECOIN_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'ConfidentialTransferMint'];
+const STABLECOIN_EXTENSIONS = [
+    'TokenMetadata',
+    'PermanentDelegate',
+    'DefaultAccountState',
+    'ConfidentialTransferMint',
+    'PausableConfig',
+];
 
-const ARCADE_TOKEN_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState'];
+const ARCADE_TOKEN_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'PausableConfig'];
 
-const TOKENIZED_SECURITY_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState'];
+const TOKENIZED_SECURITY_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'PausableConfig'];
 
-const MMF_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'TransferHook'];
+const MMF_EXTENSIONS = [
+    'TokenMetadata',
+    'PermanentDelegate',
+    'DefaultAccountState',
+    'TransferHook',
+    'PausableConfig',
+];
+
+export const TOKEN_TYPE_LABELS: Record<TokenType, string> = {
+    stablecoin: 'Stablecoin',
+    'arcade-token': 'Arcade Token',
+    'tokenized-security': 'Tokenized Security',
+    mmf: 'Money Market Fund',
+    unknown: 'Unknown',
+};
 
 // The stablecoin/arcade required sets are subsets of what the tokenized-security
 // and mmf templates create, so the richer templates' distinguishing extensions

@@ -141,6 +141,11 @@ describe('inspectToken', () => {
                                 __kind: 'DefaultAccountState',
                                 state: 'Frozen',
                             },
+                            {
+                                __kind: 'PausableConfig',
+                                authority: { __option: 'Some', value: mockAuthority },
+                                paused: false,
+                            },
                         ],
                     },
                 },
@@ -394,6 +399,7 @@ describe('Helper functions', () => {
                 { name: 'TokenMetadata' },
                 { name: 'PermanentDelegate' },
                 { name: 'DefaultAccountState' },
+                { name: 'PausableConfig' },
                 { name: 'ScaledUiAmountConfig' },
             ];
 

@@ -3,19 +3,12 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { createRpcClient } from '../utils/rpc.js';
 import { type Address } from '@solana/kit';
-import { inspectToken, type TokenInspectionResult, type TokenType } from '@solana/mosaic-sdk';
+import { inspectToken, TOKEN_TYPE_LABELS, type TokenInspectionResult, type TokenType } from '@solana/mosaic-sdk';
 
 interface InspectMintOptions {
     mintAddress: string;
     rpcUrl?: string;
 }
-
-const TOKEN_TYPE_LABELS: Record<Exclude<TokenType, 'unknown'>, string> = {
-    stablecoin: 'Stablecoin',
-    'arcade-token': 'Arcade Token',
-    'tokenized-security': 'Tokenized Security',
-    mmf: 'Money Market Fund',
-};
 
 function formatLabel(key: string): string {
     return key.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase());
@@ -83,7 +76,10 @@ function render(inspection: TokenInspectionResult): void {
     }
 
     console.log(chalk.cyan('\n🎯 Token Type Detection:'));
-    for (const [type, label] of Object.entries(TOKEN_TYPE_LABELS) as [TokenType, string][]) {
+    for (const [type, label] of Object.entries(TOKEN_TYPE_LABELS).filter(([type]) => type !== 'unknown') as [
+        TokenType,
+        string,
+    ][]) {
         const detected = detectedPatterns.includes(type);
         console.log(`   ${detected ? chalk.green('✓') : chalk.red('✗')} ${label}`);
     }
