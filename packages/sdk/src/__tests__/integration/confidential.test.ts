@@ -30,7 +30,7 @@ import {
     createConfidentialWithdrawInstructionPlan,
     createConfigureConfidentialAccountInstructionPlan,
     createEmptyConfidentialAccountInstructionPlan,
-    deriveConfidentialKeysForOwnerMint,
+    deriveConfidentialKeys,
     freeConfidentialKeys,
     inspectConfidentialAccount,
     planConfidentialInstructions,
@@ -306,17 +306,9 @@ describeSkipIf(!RUN)('confidential transfer (devnet e2e)', () => {
         record('create-mint', [await signSendConfirm(rpc, createMintTx)]);
         await waitForToken2022Account(rpc, mint.address);
 
-        // Derive sender + recipient confidential keys, bound to (owner, mint).
-        const senderKeys = await deriveConfidentialKeysForOwnerMint({
-            signer: payer,
-            owner: payer.address,
-            mint: mint.address,
-        });
-        const recipientKeys = await deriveConfidentialKeysForOwnerMint({
-            signer: recipient,
-            owner: recipient.address,
-            mint: mint.address,
-        });
+        // Derive sender + recipient confidential keys, bound to the wallet alone.
+        const senderKeys = await deriveConfidentialKeys({ signer: payer });
+        const recipientKeys = await deriveConfidentialKeys({ signer: recipient });
 
         try {
             // 2. Configure both accounts for confidential transfers.

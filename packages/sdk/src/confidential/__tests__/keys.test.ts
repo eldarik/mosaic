@@ -1,33 +1,14 @@
-import type { Address } from '@solana/kit';
 import { generateKeyPairSigner } from '@solana/kit';
 import { ElGamalKeypair, AeKey } from '@solana/zk-sdk/node';
-import {
-    deriveConfidentialKeys,
-    deriveConfidentialKeysForOwnerMint,
-    createKeyPairMessageSigner,
-    freeConfidentialKeys,
-    decryptAesBalance,
-    decryptElGamalBalance,
-    type SignMessage,
-} from '../keys.js';
+import { deriveConfidentialKeys, freeConfidentialKeys, decryptAesBalance, decryptElGamalBalance } from '../keys.js';
 
 // Uses the real @solana/zk-sdk WASM (verified to load under ts-jest ESM).
-const TOKEN_ACCOUNT_A = 'sAPDrViGV3C6PaT4xD7uRDDvB4xCURfZzDkGEd8Yv4v' as Address;
-const TOKEN_ACCOUNT_B = 'HA3KcFsXNjRJsRZq1P1Y8qPAeSZnZsFyauCDEsSSGqTj' as Address;
-const MINT_A = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as Address;
-const MINT_B = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' as Address;
 
 describe('deriveConfidentialKeys', () => {
-    let signMessage: SignMessage;
-
-    beforeEach(async () => {
+    it('is deterministic: same signer yields the same keys', async () => {
         const signer = await generateKeyPairSigner();
-        signMessage = createKeyPairMessageSigner(signer);
-    });
-
-    it('is deterministic: same signer + token account yields the same keys', async () => {
-        const a = await deriveConfidentialKeys({ tokenAccount: TOKEN_ACCOUNT_A, signMessage });
-        const b = await deriveConfidentialKeys({ tokenAccount: TOKEN_ACCOUNT_A, signMessage });
+        const a = await deriveConfidentialKeys({ signer });
+        const b = await deriveConfidentialKeys({ signer });
 
         expect(a.elgamal.pubkey().toBytes()).toEqual(b.elgamal.pubkey().toBytes());
         expect(a.aes.toBytes()).toEqual(b.aes.toBytes());
@@ -36,57 +17,11 @@ describe('deriveConfidentialKeys', () => {
         freeConfidentialKeys(b);
     });
 
-    it('binds keys to the token account: a different account yields different keys', async () => {
-        const a = await deriveConfidentialKeys({ tokenAccount: TOKEN_ACCOUNT_A, signMessage });
-        const b = await deriveConfidentialKeys({ tokenAccount: TOKEN_ACCOUNT_B, signMessage });
-
-        expect(a.elgamal.pubkey().toBytes()).not.toEqual(b.elgamal.pubkey().toBytes());
-        expect(a.aes.toBytes()).not.toEqual(b.aes.toBytes());
-
-        freeConfidentialKeys(a);
-        freeConfidentialKeys(b);
-    });
-
-    it('returns explicit overrides without signing', async () => {
-        const elgamalKeypair = ElGamalKeypair.fromSeed(new Uint8Array(32).fill(1));
-        const aesKey = AeKey.fromSeed(new Uint8Array(32).fill(2));
-        const signSpy = jest.fn<ReturnType<SignMessage>, Parameters<SignMessage>>();
-
-        const keys = await deriveConfidentialKeys({
-            tokenAccount: TOKEN_ACCOUNT_A,
-            signMessage: signSpy,
-            elgamalKeypair,
-            aesKey,
-        });
-
-        expect(keys.elgamal).toBe(elgamalKeypair);
-        expect(keys.aes).toBe(aesKey);
-        expect(signSpy).not.toHaveBeenCalled();
-        freeConfidentialKeys(keys);
-    });
-
-    it('throws when neither signMessage nor both key overrides are provided', async () => {
-        await expect(deriveConfidentialKeys({ tokenAccount: TOKEN_ACCOUNT_A })).rejects.toThrow(/signMessage/);
-    });
-});
-
-describe('deriveConfidentialKeysForOwnerMint', () => {
-    it('is deterministic: same signer + owner + mint yields the same keys', async () => {
-        const signer = await generateKeyPairSigner();
-        const a = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
-        const b = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
-
-        expect(a.elgamal.pubkey().toBytes()).toEqual(b.elgamal.pubkey().toBytes());
-        expect(a.aes.toBytes()).toEqual(b.aes.toBytes());
-
-        freeConfidentialKeys(a);
-        freeConfidentialKeys(b);
-    });
-
-    it('binds keys to the (owner, mint) pair: a different mint yields different keys', async () => {
-        const signer = await generateKeyPairSigner();
-        const a = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
-        const b = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_B });
+    it('binds keys to the wallet: a different signer yields different keys', async () => {
+        const signerA = await generateKeyPairSigner();
+        const signerB = await generateKeyPairSigner();
+        const a = await deriveConfidentialKeys({ signer: signerA });
+        const b = await deriveConfidentialKeys({ signer: signerB });
 
         expect(a.elgamal.pubkey().toBytes()).not.toEqual(b.elgamal.pubkey().toBytes());
         expect(a.aes.toBytes()).not.toEqual(b.aes.toBytes());
@@ -97,10 +32,42 @@ describe('deriveConfidentialKeysForOwnerMint', () => {
 
     it('produces usable keys (AES round-trip)', async () => {
         const signer = await generateKeyPairSigner();
-        const keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint: MINT_A });
+        const keys = await deriveConfidentialKeys({ signer });
         const ciphertext = new Uint8Array(keys.aes.encrypt(7_777n).toBytes());
         expect(decryptAesBalance(keys.aes, ciphertext)).toBe(7_777n);
         freeConfidentialKeys(keys);
+    });
+
+    // One signature, not two — the regression this guards against is a
+    // user-visible double wallet prompt for a single key derivation.
+    it('requests exactly one signature', async () => {
+        const signer = await generateKeyPairSigner();
+        const signMessages = jest.fn(signer.signMessages.bind(signer));
+        const keys = await deriveConfidentialKeys({ signer: { ...signer, signMessages } });
+
+        expect(signMessages).toHaveBeenCalledTimes(1);
+        freeConfidentialKeys(keys);
+    });
+
+    it('re-throws a genuine user rejection without diagnosing it as an incompatibility', async () => {
+        const signer = await generateKeyPairSigner();
+        const rejection = Object.assign(new Error('User rejected the request.'), { code: 4001 });
+        const signMessages = jest.fn(async () => {
+            throw rejection;
+        });
+
+        await expect(deriveConfidentialKeys({ signer: { ...signer, signMessages } })).rejects.toBe(rejection);
+    });
+
+    it('diagnoses a non-rejection signer refusal instead of surfacing the raw error', async () => {
+        const signer = await generateKeyPairSigner();
+        const signMessages = jest.fn(async () => {
+            throw new Error('unsupported payload');
+        });
+
+        await expect(deriveConfidentialKeys({ signer: { ...signer, signMessages } })).rejects.toThrow(
+            /solana-conf-bal\/v1/,
+        );
     });
 });
 
