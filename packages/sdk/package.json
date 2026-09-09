@@ -19,6 +19,10 @@
             "types": "./dist/confidential/index.d.ts",
             "import": "./dist/confidential/index.js"
         },
+        "./confidential/wallet-standard": {
+            "types": "./dist/confidential/wallet-standard.d.ts",
+            "import": "./dist/confidential/wallet-standard.js"
+        },
         "./_zk": {
             "types": "./dist/confidential/_zk.node.d.ts",
             "browser": "./dist/confidential/_zk.browser.js",
@@ -71,7 +75,13 @@
         "typescript": "^5.9.3"
     },
     "peerDependencies": {
-        "typescript": "^5.0.0"
+        "typescript": "^5.0.0",
+        "@wallet-standard/core": "^1.1.2"
+    },
+    "peerDependenciesMeta": {
+        "@wallet-standard/core": {
+            "optional": true
+        }
     },
     "keywords": [
         "solana",
