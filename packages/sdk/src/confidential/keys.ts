@@ -16,30 +16,35 @@ import {
     ElGamalCiphertext,
     AeCiphertext,
 } from '@solana/mosaic-sdk/_zk';
+import { isSignerRejection, describeError } from './signer-errors.js';
 
 /**
  * Confidential Transfer key derivation.
  *
- * A token account's confidential balances are encrypted under two keys owned by
- * the account authority:
+ * A confidential-balance holder's balances are encrypted under two keys owned
+ * by the wallet:
  *   - an **ElGamal** keypair (homomorphic ciphertexts: pending/available balance), and
  *   - an **AES** key (the cheap-to-decrypt "decryptable available balance").
  *
- * Both are derived deterministically from an Ed25519 signature over a canonical,
- * token-account-bound message, so they never need to be stored — the authority
- * can always re-derive them by signing again. The public seed is the token
- * account address and the message to sign is produced by
- * `ConfidentialKeys.signerMessage(seed)`; a single signature yields BOTH keys
- * (`.elgamal()` / `.ae()`).
+ * Both are derived deterministically from a single Ed25519 signature over the
+ * canonical `solana-conf-bal/v1` message, so they never need to be stored — the
+ * wallet can always re-derive them by signing again. Account-key derivation is
+ * **wallet-only**: there is no seed, so the same signer always derives the same
+ * account keys regardless of mint or token account. That matches the standard
+ * every other client implementing `ConfidentialKeys.signerMessage`/`fromSignature`
+ * uses, so keys derived here are byte-identical to keys derived anywhere else for
+ * the same wallet. (The mint authority's *supply* keys, below, are the one
+ * exception — they stay seeded, deliberately, so they never coincide with the
+ * mint authority's own wallet-only account keys.)
  *
  * NOTE: as of `@solana/zk-sdk` 0.5.x this is ONE signature over one canonical
- * message (`b"solana-conf-bal/v1" || seed`). It replaces the previous 0.4.x
- * scheme of two independent signatures over `b"ElGamalSecretKey" || seed` and
- * `b"AeKey" || seed`. The keys the two schemes produce are DIFFERENT, so an
- * account configured under the old scheme cannot be re-derived under this one —
- * its balances are still decryptable, but only with the retained key bytes.
- * token-2022 0.15.0 made the same switch in `deriveElGamalKeypairForOwnerMint` /
- * `deriveAeKeyForOwnerMint`, so this is an upstream-wide change, not a local one.
+ * message. It replaces the previous 0.4.x scheme of two independent signatures
+ * over `b"ElGamalSecretKey" || seed` and `b"AeKey" || seed`, and the pre-HOO-1595
+ * scheme of binding account keys to `(owner, mint)` or a token account address.
+ * All of those produce DIFFERENT key bytes than the current wallet-only scheme,
+ * so an account configured under an older scheme cannot be re-derived under this
+ * one — its balances are still decryptable, but only with the retained key bytes
+ * (see {@link assertConfidentialKeysMatchAccount}).
  *
  * `@solana/zk-sdk` (the WASM crypto dependency) is imported only here and in
  * `proof.ts`, so the rest of the SDK stays free of the WASM dependency and these
@@ -70,115 +75,18 @@ export interface ConfidentialKeys {
 
 export interface DeriveConfidentialKeysInput {
     /**
-     * The token account the keys are bound to. Its address is the public seed,
-     * so keys derived for one account cannot decrypt another's balances.
-     */
-    tokenAccount: Address;
-    /**
-     * Signs the canonical derivation messages. Required unless both
-     * `elgamalKeypair` and `aesKey` are supplied.
-     */
-    signMessage?: SignMessage;
-    /** Explicit ElGamal keypair override (skips derivation for this key). */
-    elgamalKeypair?: ElGamalKeypair;
-    /** Explicit AES key override (skips derivation for this key). */
-    aesKey?: AeKey;
-}
-
-/**
- * Derives (or accepts overrides for) the ElGamal keypair and AES key for a
- * confidential token account, seeded by the **token account address**.
- *
- * ⚠️ **Prefer {@link deriveConfidentialKeysForOwnerMint} for ordinary wallets.**
- * That one binds to `(owner, mint)`, so the keys survive closing and reopening
- * the account; these are bound to the account address, so a reopened account
- * derives *different* keys and can no longer read its old balances.
- *
- * Reach for this function when you need control over the seed rather than the
- * `(owner, mint)` convention — most notably PDA / passkey wallets, which key off
- * `ConfidentialKeys.pdaWalletPublicSeed(...)` instead of a plain address. It is
- * the thin wrapper over the canonical upstream scheme; the `(owner, mint)`
- * helper is the opinionated default layered on top.
- *
- * Derivation is deterministic: the same authority + token account always yields
- * the same keys. Pass `elgamalKeypair`/`aesKey` to bypass derivation (e.g. tests,
- * or callers that manage their own key material).
- *
- * ⚠️ The returned keys own WASM memory — free them with {@link freeConfidentialKeys}.
- */
-export async function deriveConfidentialKeys(input: DeriveConfidentialKeysInput): Promise<ConfidentialKeys> {
-    const { tokenAccount, signMessage, elgamalKeypair, aesKey } = input;
-
-    if (elgamalKeypair && aesKey) {
-        return { elgamal: elgamalKeypair, aes: aesKey };
-    }
-    if (!signMessage) {
-        throw new Error(
-            'deriveConfidentialKeys requires `signMessage`, or both `elgamalKeypair` and `aesKey` to be provided.',
-        );
-    }
-
-    // The token account address is the public seed (32 bytes).
-    const seed = new Uint8Array(getAddressEncoder().encode(tokenAccount));
-
-    // One signature over the single canonical message yields both components.
-    // Only reached when at least one key still has to be derived (see the
-    // both-overrides early return above).
-    const derived = ZkConfidentialKeys.fromSignature(await signMessage(ZkConfidentialKeys.signerMessage(seed)));
-    try {
-        return {
-            elgamal: elgamalKeypair ?? derived.elgamal(),
-            aes: aesKey ?? derived.ae(),
-        };
-    } finally {
-        // `elgamal()`/`ae()` hand back independently-owned objects, so the pair
-        // itself is ours to release — otherwise every derivation leaks it.
-        derived.free();
-    }
-}
-
-export interface DeriveConfidentialKeysForOwnerMintInput {
-    /**
-     * Signs the canonical derivation messages. A kit `KeyPairSigner` satisfies
-     * `MessagePartialSigner`; in the browser, wrap the wallet adapter.
+     * Signs the canonical derivation message. A kit `KeyPairSigner` satisfies
+     * `MessagePartialSigner`; in the browser, wrap the wallet adapter — see
+     * `@solana/mosaic-sdk/confidential/wallet-standard`.
      */
     signer: MessagePartialSigner;
-    /** The token account owner the keys are bound to. */
-    owner: Address;
-    /** The mint the keys are bound to. */
-    mint: Address;
-}
-
-/**
- * The public seed behind Token-2022's `(owner, mint)` key derivation: the two
- * addresses concatenated, exactly as upstream's (unexported) `ownerMintSeed`
- * builds it. Replicated here so a single signature can yield both keys — see
- * {@link deriveConfidentialKeysForOwnerMint}. Verified against upstream by
- * `keys.test.ts`, which asserts the keys match
- * `deriveElGamalKeypairForOwnerMint` / `deriveAeKeyForOwnerMint`.
- */
-function ownerMintSeed(owner: Address, mint: Address): Uint8Array {
-    return new Uint8Array(getTupleEncoder([getAddressEncoder(), getAddressEncoder()]).encode([owner, mint]));
-}
-
-/**
- * Did the user dismiss the wallet prompt, rather than the signer refusing the
- * message outright? A cancellation must not be reported as an incompatibility.
- */
-function isSignerRejection(error: unknown): boolean {
-    if ((error as { code?: unknown } | null)?.code === 4001) return true;
-    return /reject|denied|declin|cancel/i.test(describeError(error));
-}
-
-function describeError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error ?? 'unknown error');
 }
 
 /**
  * Derives an ElGamal keypair + AES key from a public seed with a **single**
  * signature over `ConfidentialKeys.signerMessage(seed)`. Shared by every
- * derivation in this module so they all cost one signature (one wallet prompt)
- * and all free the intermediate pair.
+ * derivation in this module so they all cost one signature (one wallet prompt),
+ * fail the same way, and all free the intermediate pair.
  *
  * A signer that refuses the message gets a diagnosis rather than the wallet's
  * raw text: the failure is intrinsic to the derivation scheme (the message bytes
@@ -195,12 +103,12 @@ async function deriveKeysFromSeed(signer: MessagePartialSigner, seed: Uint8Array
         if (isSignerRejection(error)) throw error;
         throw new Error(
             `The signer refused to sign the confidential-balance key-derivation message ` +
-                `(${describeError(error)}). That message is \`solana-conf-bal/v1 || owner || mint\` — a ` +
-                `domain-separated derivation seed, not a transaction — but some browser wallets classify ` +
-                `binary sign-message payloads as transactions and block them. Its bytes determine the ` +
-                `account keys, so they cannot be changed to satisfy a wallet without making balances ` +
-                `undecryptable by every other tool. Use a wallet that signs arbitrary messages, or key the ` +
-                `account through ConfidentialKeys.fromIkm/fromPrf instead (different keys — no CLI interop).`,
+                `(${describeError(error)}). That message is \`solana-conf-bal/v1\` plus this derivation's seed ` +
+                `— a domain-separated derivation seed, not a transaction — but some browser wallets classify ` +
+                `binary sign-message payloads as transactions and block them. Its bytes determine the account ` +
+                `keys, so they cannot be changed to satisfy a wallet without making balances undecryptable by ` +
+                `every other tool. Use a wallet that signs arbitrary messages, or key the account through ` +
+                `ConfidentialKeys.fromIkm/fromPrf instead (different keys — no cross-tool interop).`,
             { cause: error },
         );
     }
@@ -211,38 +119,36 @@ async function deriveKeysFromSeed(signer: MessagePartialSigner, seed: Uint8Array
     }
 
     const derived = ZkConfidentialKeys.fromSignature(new Uint8Array(signature));
+    let elgamal: ElGamalKeypair | undefined;
     try {
         // `elgamal()`/`ae()` hand back independently-owned objects, so the pair
         // itself is ours to release — otherwise every derivation leaks it.
-        return { elgamal: derived.elgamal(), aes: derived.ae() };
+        elgamal = derived.elgamal();
+        const aes = derived.ae();
+        return { elgamal, aes };
+    } catch (error) {
+        elgamal?.free();
+        throw error;
     } finally {
         derived.free();
     }
 }
 
 /**
- * Derives the ElGamal keypair and AES key for a confidential token account with
- * Token-2022's `(owner, mint)`-bound derivation, as `@solana/zk-sdk` WASM objects
- * the operation helpers consume.
+ * Derives the ElGamal keypair and AES key for a confidential-balance holder,
+ * bound to the **wallet alone** — no token-account, owner, or mint seed. One
+ * signature yields both keys (`ConfidentialKeys.signerMessage(new Uint8Array(0))`,
+ * then `fromSignature`).
  *
- * Binding to `(owner, mint)` (rather than the token account address) keeps the
- * keys stable across closing and reopening the token account and prevents key
- * reuse across mints. Derivation is deterministic and requires no storage.
- *
- * Takes **one** signature. Both keys come from the same canonical message
- * (`ConfidentialKeys.signerMessage(ownerMintSeed(owner, mint))`), so calling
- * upstream's `deriveElGamalKeypairForOwnerMint` and `deriveAeKeyForOwnerMint`
- * would sign identical bytes twice — two wallet prompts for one derivation. This
- * derives the pair directly instead, exactly as {@link deriveConfidentialKeys}
- * does; the resulting keys are byte-identical to the two-call form.
+ * Because there is no seed, the same signer always derives the same keys for
+ * every mint and every token account it holds — this is the `solana-conf-bal/v1`
+ * standard, so keys derived here are byte-identical to keys derived by any other
+ * standard client for the same wallet.
  *
  * ⚠️ The returned keys own WASM memory — free them with {@link freeConfidentialKeys}.
  */
-export async function deriveConfidentialKeysForOwnerMint(
-    input: DeriveConfidentialKeysForOwnerMintInput,
-): Promise<ConfidentialKeys> {
-    const { signer, owner, mint } = input;
-    return deriveKeysFromSeed(signer, ownerMintSeed(owner, mint));
+export async function deriveConfidentialKeys(input: DeriveConfidentialKeysInput): Promise<ConfidentialKeys> {
+    return deriveKeysFromSeed(input.signer, new Uint8Array(0));
 }
 
 export interface DeriveConfidentialSupplyKeysInput {
@@ -259,12 +165,12 @@ export interface DeriveConfidentialSupplyKeysInput {
 /**
  * Domain tag that separates supply-key derivation from account-key derivation.
  *
- * Account keys seed on `(owner, mint)` — two bare addresses. Prefixing this tag
- * makes the supply seed unreachable from any `(owner, mint)` pair, so the mint
- * authority's supply keys can never coincide with its own (or anyone's) account
- * keys for the same mint. Without it the two derivations are identical whenever
- * `owner === mintAuthority`, and disclosing account keys — to an auditor, to
- * support, in a backup — would also disclose the keys guarding the total supply.
+ * Account keys are wallet-only (no seed at all — see {@link deriveConfidentialKeys}),
+ * so without this tag a mint authority's supply-key derivation would collide with
+ * its own account-key derivation whenever the two share a signer, and disclosing
+ * account keys — to an auditor, to support, in a backup — would also disclose the
+ * keys guarding the total supply. Prefixing this tag (plus binding to the mint)
+ * keeps the supply seed unreachable from the account derivation's empty seed.
  *
  * This is Mosaic's own seed, not an upstream convention: it is not interchangeable
  * with `spl-token`'s supply-key derivation, and changing the tag changes every
@@ -281,10 +187,10 @@ const SUPPLY_KEY_DOMAIN = 'mosaic-conf-supply/v1';
  *
  * Bound to `(mintAuthority, mint)` under the {@link SUPPLY_KEY_DOMAIN} tag, so the
  * keys are stable, need no storage, and are cryptographically separated from the
- * `(owner, mint)` account derivation — a mint authority that also holds a
- * confidential account of the same mint gets two independent key sets.
+ * mint authority's own wallet-only account keys — a mint authority that also holds
+ * a confidential account of the same mint gets two independent key sets.
  *
- * Takes one signature, like {@link deriveConfidentialKeysForOwnerMint}.
+ * Takes one signature, like {@link deriveConfidentialKeys}.
  *
  * ⚠️ The returned keys own WASM memory — free them with {@link freeConfidentialKeys}.
  */
@@ -334,11 +240,11 @@ export function getConfidentialMintBurnInit(keys: ConfidentialKeys): Confidentia
  * the key an account or mint's confidential-transfer extension was actually
  * configured with (e.g. {@link getConfidentialTransferAccountElgamalPubkey}).
  *
- * Since `@solana/zk-sdk` 0.5.x, key derivation is a single signature over a new
- * canonical message; an account configured under the previous two-signature
- * scheme re-derives to *different* key bytes under the same signer and seed
- * (see the module doc above). Without this check, a caller who re-derives keys
- * for such an account gets no error — decryption just returns garbage or a WASM
+ * Key derivation has changed schemes twice (0.4.x's two-signature scheme, then
+ * the pre-HOO-1595 `(owner, mint)`/token-account-seeded scheme, now wallet-only);
+ * an account configured under an older scheme re-derives to *different* key bytes
+ * under the current one. Without this check, a caller who re-derives keys for
+ * such an account gets no error — decryption just returns garbage or a WASM
  * "tampered ciphertext" error, indistinguishable from a corrupt account. Call
  * this right after fetching the account/mint and before using `keys` to decrypt
  * or build a proof.
@@ -361,8 +267,8 @@ export function assertConfidentialKeysMatchAccount(
         throw new Error(
             `The provided confidential keys' ElGamal public key (${derived}) does not match ${context}'s ` +
                 `registered key (${registeredElgamalPubkey}). This happens when an account was configured ` +
-                `under the previous zk-sdk key-derivation scheme (pre-0.5.x) and its keys are re-derived under ` +
-                `the current one — they are not the same keys. Use the retained key bytes from when the ` +
+                `under a previous key-derivation scheme and its keys are re-derived under the current ` +
+                `wallet-only one — they are not the same keys. Use the retained key bytes from when the ` +
                 `account was configured, rather than re-deriving; or, if this account is unfamiliar, its data ` +
                 `may be corrupt.`,
         );
