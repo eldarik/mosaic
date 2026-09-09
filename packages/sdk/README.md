@@ -209,7 +209,7 @@ freeConfidentialKeys(keys); // release WASM memory when done
 > Standard `solana:signMessage` result or silently demote specific wallets to a
 > broken signing path. Import `@solana/mosaic-sdk/confidential/wallet-standard`
 > and wrap your framework's fallback signer with `createResilientSignMessage(owner,
-> fallbackSignMessage)`, then `createMessageSigner(owner, signMessage)` to get the
+fallbackSignMessage)`, then `createMessageSigner(owner, signMessage)` to get the
 > `MessagePartialSigner` this function needs.
 
 ## Access lists (ABL, SRFC-37)

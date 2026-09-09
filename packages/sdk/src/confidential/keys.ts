@@ -1,5 +1,11 @@
 import { type MessagePartialSigner, createSignableMessage, signBytes } from '@solana/kit';
-import { ConfidentialKeys as ZkConfidentialKeys, ElGamalKeypair, AeKey, ElGamalCiphertext, AeCiphertext } from '@solana/mosaic-sdk/_zk';
+import {
+    ConfidentialKeys as ZkConfidentialKeys,
+    ElGamalKeypair,
+    AeKey,
+    ElGamalCiphertext,
+    AeCiphertext,
+} from '@solana/mosaic-sdk/_zk';
 import { isSignerRejection, describeError } from './signer-errors.js';
 
 /**
