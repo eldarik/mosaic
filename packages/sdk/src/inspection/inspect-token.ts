@@ -20,14 +20,47 @@ import type {
 } from './types.js';
 import { TOKEN_ACL_PROGRAM_ID } from '../token-acl/index.js';
 
-const STABLECOIN_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'ConfidentialTransferMint'];
+const STABLECOIN_EXTENSIONS = [
+    'TokenMetadata',
+    'PermanentDelegate',
+    'DefaultAccountState',
+    'ConfidentialTransferMint',
+    'PausableConfig',
+];
 
-const ARCADE_TOKEN_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState'];
+const ARCADE_TOKEN_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'PausableConfig'];
 
-const TOKENIZED_SECURITY_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState'];
+const TOKENIZED_SECURITY_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'PausableConfig'];
+
+const MMF_EXTENSIONS = ['TokenMetadata', 'PermanentDelegate', 'DefaultAccountState', 'TransferHook', 'PausableConfig'];
+
+export const TOKEN_TYPE_LABELS: Record<TokenType, string> = {
+    stablecoin: 'Stablecoin',
+    'arcade-token': 'Arcade Token',
+    'tokenized-security': 'Tokenized Security',
+    mmf: 'Money Market Fund',
+    unknown: 'Unknown',
+};
+
+// The stablecoin/arcade required sets are subsets of what the tokenized-security
+// and mmf templates create, so the richer templates' distinguishing extensions
+// must act as disqualifiers — otherwise a tokenized security also reads as a
+// stablecoin (and an mmf as an arcade token). Confidential balances stay out of
+// the mmf list: the mmf template adds them optionally (`enableConfidential`).
+const NOT_STABLECOIN_EXTENSIONS = ['ScaledUiAmountConfig', 'PermissionedBurn', 'TransferHook'];
+const NOT_ARCADE_TOKEN_EXTENSIONS = [
+    'ConfidentialTransferMint',
+    'ScaledUiAmountConfig',
+    'PermissionedBurn',
+    'TransferHook',
+];
+const NOT_MMF_EXTENSIONS = ['ScaledUiAmountConfig', 'PermissionedBurn'];
 
 function satisfiesStablecoinPatternInternal(extensionNames: string[]): boolean {
-    return STABLECOIN_EXTENSIONS.every(ext => extensionNames.includes(ext));
+    return (
+        STABLECOIN_EXTENSIONS.every(ext => extensionNames.includes(ext)) &&
+        !NOT_STABLECOIN_EXTENSIONS.some(ext => extensionNames.includes(ext))
+    );
 }
 
 export function satisfiesStablecoinPattern(extensions: TokenExtension[]): boolean {
@@ -38,7 +71,7 @@ export function satisfiesStablecoinPattern(extensions: TokenExtension[]): boolea
 function satisfiesArcadeTokenPatternInternal(extensionNames: string[]): boolean {
     return (
         ARCADE_TOKEN_EXTENSIONS.every(ext => extensionNames.includes(ext)) &&
-        !extensionNames.includes('ConfidentialTransferMint')
+        !NOT_ARCADE_TOKEN_EXTENSIONS.some(ext => extensionNames.includes(ext))
     );
 }
 
@@ -59,12 +92,27 @@ export function satisfiesSecurityTokenPattern(extensions: TokenExtension[]): boo
     return satisfiesSecurityTokenPatternInternal(extensionNames);
 }
 
+function satisfiesMmfPatternInternal(extensionNames: string[]): boolean {
+    return (
+        MMF_EXTENSIONS.every(ext => extensionNames.includes(ext)) &&
+        !NOT_MMF_EXTENSIONS.some(ext => extensionNames.includes(ext))
+    );
+}
+
+export function satisfiesMmfPattern(extensions: TokenExtension[]): boolean {
+    const extensionNames = extensions.map(ext => ext.name);
+    return satisfiesMmfPatternInternal(extensionNames);
+}
+
 export function detectTokenPatterns(extensions: TokenExtension[]): TokenType[] {
     const extensionNames = extensions.map(ext => ext.name);
     const matches: TokenType[] = [];
 
     if (satisfiesSecurityTokenPatternInternal(extensionNames)) {
         matches.push('tokenized-security');
+    }
+    if (satisfiesMmfPatternInternal(extensionNames)) {
+        matches.push('mmf');
     }
     if (satisfiesStablecoinPatternInternal(extensionNames)) {
         matches.push('stablecoin');

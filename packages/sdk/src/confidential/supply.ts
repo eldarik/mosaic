@@ -10,7 +10,7 @@ import { toAuthoritySigner } from './util.js';
  * (updated homomorphically by mint/burn) and as a cheap-to-decrypt AES
  * "decryptable supply". The two can drift — e.g. after burns whose pending-burn
  * has been applied — so the mint authority can re-assert the decryptable supply
- * to match the true supply it tracks with its supply AES key.
+ * to match the true supply, re-encrypting it under the supply authority's AES key.
  *
  * Note: rotating the supply ElGamal keypair
  * (`RotateSupplyElgamalPubkey`) additionally requires a supply-re-encryption
@@ -43,9 +43,13 @@ import { toAuthoritySigner } from './util.js';
 export function createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan(input: {
     /** The token mint (must carry `ConfidentialMintBurn`). */
     mint: Address;
-    /** The mint authority. A bare address becomes a no-op signer. */
+    /** The mint authority — the on-chain signer. A bare address becomes a no-op signer. */
     authority: Address | TransactionSigner;
-    /** The mint authority's supply keys (the AES key encrypts the decryptable supply). */
+    /**
+     * The mint's supply keys, from the **supply authority** wallet (the AES key
+     * encrypts the decryptable supply). Not a signer, so it need not be the same
+     * wallet as `authority`.
+     */
     supplyKeys: ConfidentialKeys;
     /**
      * The true current total supply, in **raw** base units — not decimal-scaled.

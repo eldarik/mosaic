@@ -34,7 +34,6 @@ import {
     createConfigureConfidentialAccountInstructionPlan,
     createEmptyConfidentialAccountInstructionPlan,
     deriveConfidentialKeys,
-    deriveConfidentialSupplyKeys,
     freeConfidentialKeys,
     getConfidentialMintBurnInit,
     inspectConfidentialAccount,
@@ -489,14 +488,18 @@ describeSkipIf(!RUN)('confidential transfer (devnet e2e)', () => {
         const rpc = client.rpc as Rpc<SolanaRpcApi>;
         const mint = await generateKeyPairSigner();
 
-        // The holder is deliberately NOT the mint authority. Supply keys derive from
-        // (mintAuthority, mint) and account keys from (owner, mint), so reusing `payer`
-        // for both would make the two key sets identical — and a wrapper that passed
-        // account keys where supply keys belong (or vice versa) would still pass on
-        // chain. A separate holder keeps the two distinguishable. It needs no SOL:
-        // `payer` covers every fee and rent, and `signTransactionMessageWithSigners`
-        // picks up the holder's signature from the message.
+        // The holder is deliberately NOT the mint authority, and the supply authority
+        // is a third wallet again. Key derivation is wallet-only, so a wallet has
+        // exactly one key pair: reusing `payer` as the supply authority would make the
+        // supply keys identical to `payer`'s own balance keys, and a wrapper that
+        // passed account keys where supply keys belong (or vice versa) would still
+        // pass on chain. Three distinct wallets keep the roles distinguishable — and
+        // mirror the rule the SDK now documents, that separation comes from using a
+        // different wallet rather than a different seed. Neither extra wallet needs
+        // SOL: `payer` covers every fee and rent, and `signTransactionMessageWithSigners`
+        // picks up their signatures from the message.
         const holder = await generateKeyPairSigner();
+        const supplyAuthority = await generateKeyPairSigner();
 
         const [ownerAta] = await findAssociatedTokenPda({
             owner: holder.address,
@@ -515,10 +518,10 @@ describeSkipIf(!RUN)('confidential transfer (devnet e2e)', () => {
         const step = async (label: string, feePayer: TransactionSigner, plan: InstructionPlan) =>
             record(label, await runPlan(client, feePayer, plan));
 
-        // Supply keys (bound to the mint authority + mint) back the encrypted
-        // supply; they must be derived before the mint so their init values can
-        // be baked into the ConfidentialMintBurn extension.
-        const supplyKeys = await deriveConfidentialSupplyKeys({ signer: payer, mint: mint.address });
+        // The supply authority's wallet-only keys back the encrypted supply; they
+        // must be derived before the mint so their init values can be baked into
+        // the ConfidentialMintBurn extension.
+        const supplyKeys = await deriveConfidentialKeys({ signer: supplyAuthority });
         const ownerKeys = await deriveConfidentialKeys({ signer: holder });
         // Guard the point of using a separate holder: if these ever coincide, the
         // supply/account key assertions below stop proving anything.

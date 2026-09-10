@@ -52,6 +52,21 @@ export function getConfidentialTransferAccountElgamalPubkey(token: DecodedToken)
 }
 
 /**
+ * The supply ElGamal public key a decoded mint's encrypted total supply is
+ * maintained under, or `null` if it has no `ConfidentialMintBurn` extension. The
+ * mint-side counterpart to {@link getConfidentialTransferAccountElgamalPubkey},
+ * used to catch a caller presenting some other wallet's keys as the supply keys
+ * before a proof is built from them.
+ */
+export function getConfidentialMintBurnSupplyElgamalPubkey(mint: DecodedMint): Address | null {
+    if (mint.data.extensions.__option !== 'Some') {
+        return null;
+    }
+    const ext = mint.data.extensions.value.find(e => e.__kind === 'ConfidentialMintBurn');
+    return ext && ext.__kind === 'ConfidentialMintBurn' ? ext.supplyElgamalPubkey : null;
+}
+
+/**
  * Whether a decoded mint carries the `ConfidentialTransferFee` extension, which
  * requires the fee-aware confidential transfer variant rather than the standard
  * one.

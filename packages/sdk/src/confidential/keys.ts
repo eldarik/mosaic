@@ -4,9 +4,6 @@ import {
     type ReadonlyUint8Array,
     createSignableMessage,
     getAddressDecoder,
-    getAddressEncoder,
-    getTupleEncoder,
-    getUtf8Encoder,
     signBytes,
 } from '@solana/kit';
 import {
@@ -28,14 +25,21 @@ import { isSignerRejection, describeError } from './signer-errors.js';
  *
  * Both are derived deterministically from a single Ed25519 signature over the
  * canonical `solana-conf-bal/v1` message, so they never need to be stored — the
- * wallet can always re-derive them by signing again. Account-key derivation is
+ * wallet can always re-derive them by signing again. Derivation is
  * **wallet-only**: there is no seed, so the same signer always derives the same
- * account keys regardless of mint or token account. That matches the standard
+ * keys regardless of mint or token account. That matches the standard
  * every other client implementing `ConfidentialKeys.signerMessage`/`fromSignature`
  * uses, so keys derived here are byte-identical to keys derived anywhere else for
- * the same wallet. (The mint authority's *supply* keys, below, are the one
- * exception — they stay seeded, deliberately, so they never coincide with the
- * mint authority's own wallet-only account keys.)
+ * the same wallet.
+ *
+ * A consequence worth stating plainly, because it drives the API: a wallet has
+ * exactly **one** confidential key pair. There is no domain separation to be had
+ * within a wallet — any key derived from a wallet *is* that wallet's
+ * balance-decryption key. So a role that must not share keys with a holder needs
+ * its own wallet, not its own seed. That is why a `ConfidentialMintBurn` mint's
+ * **supply** keys are simply {@link deriveConfidentialKeys} run against a
+ * dedicated *supply authority* wallet (see {@link getConfidentialMintBurnInit}),
+ * and why the same goes for an auditor key.
  *
  * NOTE: as of `@solana/zk-sdk` 0.5.x this is ONE signature over one canonical
  * message. It replaces the previous 0.4.x scheme of two independent signatures
@@ -151,60 +155,6 @@ export async function deriveConfidentialKeys(input: DeriveConfidentialKeysInput)
     return deriveKeysFromSeed(input.signer, new Uint8Array(0));
 }
 
-export interface DeriveConfidentialSupplyKeysInput {
-    /**
-     * The **mint authority** — signs the canonical derivation message. The supply
-     * keys are bound to `(mintAuthority, mint)`, so the same authority always
-     * re-derives the same supply keys.
-     */
-    signer: MessagePartialSigner;
-    /** The mint the supply keys are bound to. */
-    mint: Address;
-}
-
-/**
- * Domain tag that separates supply-key derivation from account-key derivation.
- *
- * Account keys are wallet-only (no seed at all — see {@link deriveConfidentialKeys}),
- * so without this tag a mint authority's supply-key derivation would collide with
- * its own account-key derivation whenever the two share a signer, and disclosing
- * account keys — to an auditor, to support, in a backup — would also disclose the
- * keys guarding the total supply. Prefixing this tag (plus binding to the mint)
- * keeps the supply seed unreachable from the account derivation's empty seed.
- *
- * This is Mosaic's own seed, not an upstream convention: it is not interchangeable
- * with `spl-token`'s supply-key derivation, and changing the tag changes every
- * derived supply key.
- */
-const SUPPLY_KEY_DOMAIN = 'mosaic-conf-supply/v1';
-
-/**
- * Derives the **supply** ElGamal keypair + AES key for a `ConfidentialMintBurn`
- * mint. These are the mint authority's keys for the encrypted total supply,
- * distinct from any account's balance keys: the supply AES key encrypts the
- * decryptable supply, and the supply ElGamal keypair backs the mint/burn equality
- * proof.
- *
- * Bound to `(mintAuthority, mint)` under the {@link SUPPLY_KEY_DOMAIN} tag, so the
- * keys are stable, need no storage, and are cryptographically separated from the
- * mint authority's own wallet-only account keys — a mint authority that also holds
- * a confidential account of the same mint gets two independent key sets.
- *
- * Takes one signature, like {@link deriveConfidentialKeys}.
- *
- * ⚠️ The returned keys own WASM memory — free them with {@link freeConfidentialKeys}.
- */
-export async function deriveConfidentialSupplyKeys(
-    input: DeriveConfidentialSupplyKeysInput,
-): Promise<ConfidentialKeys> {
-    const seed = getTupleEncoder([getUtf8Encoder(), getAddressEncoder(), getAddressEncoder()]).encode([
-        SUPPLY_KEY_DOMAIN,
-        input.signer.address,
-        input.mint,
-    ]);
-    return deriveKeysFromSeed(input.signer, new Uint8Array(seed));
-}
-
 /** The two init values a `ConfidentialMintBurn` mint needs for its initial (zero) supply. */
 export interface ConfidentialMintBurnInit {
     /** The supply ElGamal public key, as a kit `Address` (for `Token.withConfidentialMintBurn`). */
@@ -215,9 +165,28 @@ export interface ConfidentialMintBurnInit {
 
 /**
  * Computes the `{ supplyElgamalPubkey, decryptableSupply }` pair that
- * {@link Token.withConfidentialMintBurn} needs, from derived supply keys. The
+ * {@link Token.withConfidentialMintBurn} needs, from the mint's supply keys. The
  * decryptable supply is the supply AES key's encryption of the initial supply
  * (`0`). Does not free `keys` (the caller owns them).
+ *
+ * `keys` are just {@link deriveConfidentialKeys} run against the **supply
+ * authority** — a wallet dedicated to the encrypted supply, separate from any
+ * wallet that holds a confidential balance:
+ *
+ * ```ts
+ * const supplyKeys = await deriveConfidentialKeys({ signer: supplyAuthority });
+ * new Token().withConfidentialMintBurn(getConfidentialMintBurnInit(supplyKeys));
+ * ```
+ *
+ * ⚠️ Deriving these from a wallet that also holds confidential balances makes the
+ * supply keys *identical* to that wallet's balance-decryption keys — derivation is
+ * wallet-only, so a wallet has one key pair and no more. Handing the supply keys to
+ * an auditor would then hand over that wallet's balances too. Use a dedicated
+ * wallet; there is no in-wallet separation to fall back on.
+ *
+ * The supply keypair is never an on-chain signer — it is proof material — so the
+ * supply authority need not be the mint authority that signs mint/burn
+ * instructions.
  */
 export function getConfidentialMintBurnInit(keys: ConfidentialKeys): ConfidentialMintBurnInit {
     const pubkey = keys.elgamal.pubkey();
@@ -236,9 +205,22 @@ export function getConfidentialMintBurnInit(keys: ConfidentialKeys): Confidentia
 }
 
 /**
+ * The ElGamal public key of a {@link ConfidentialKeys} pair, as a kit `Address`.
+ * Frees the intermediate WASM pubkey object.
+ */
+function derivedElgamalAddress(keys: ConfidentialKeys): Address {
+    const pubkey = keys.elgamal.pubkey();
+    try {
+        return getAddressDecoder().decode(pubkey.toBytes());
+    } finally {
+        pubkey.free?.();
+    }
+}
+
+/**
  * Asserts that `keys`'s ElGamal public key matches `registeredElgamalPubkey` —
- * the key an account or mint's confidential-transfer extension was actually
- * configured with (e.g. {@link getConfidentialTransferAccountElgamalPubkey}).
+ * the key an account's confidential-transfer extension was actually configured
+ * with (e.g. {@link getConfidentialTransferAccountElgamalPubkey}).
  *
  * Key derivation has changed schemes twice (0.4.x's two-signature scheme, then
  * the pre-HOO-1595 `(owner, mint)`/token-account-seeded scheme, now wallet-only);
@@ -246,23 +228,17 @@ export function getConfidentialMintBurnInit(keys: ConfidentialKeys): Confidentia
  * under the current one. Without this check, a caller who re-derives keys for
  * such an account gets no error — decryption just returns garbage or a WASM
  * "tampered ciphertext" error, indistinguishable from a corrupt account. Call
- * this right after fetching the account/mint and before using `keys` to decrypt
+ * this right after fetching the account and before using `keys` to decrypt
  * or build a proof.
  *
- * @param context - What's being checked, for the error message (e.g. the token account or mint address).
+ * @param context - What's being checked, for the error message (e.g. the token account address).
  */
 export function assertConfidentialKeysMatchAccount(
     keys: ConfidentialKeys,
     registeredElgamalPubkey: Address,
     context: string,
 ): void {
-    const pubkey = keys.elgamal.pubkey();
-    let derived: Address;
-    try {
-        derived = getAddressDecoder().decode(pubkey.toBytes());
-    } finally {
-        pubkey.free?.();
-    }
+    const derived = derivedElgamalAddress(keys);
     if (derived !== registeredElgamalPubkey) {
         throw new Error(
             `The provided confidential keys' ElGamal public key (${derived}) does not match ${context}'s ` +
@@ -271,6 +247,38 @@ export function assertConfidentialKeysMatchAccount(
                 `wallet-only one — they are not the same keys. Use the retained key bytes from when the ` +
                 `account was configured, rather than re-deriving; or, if this account is unfamiliar, its data ` +
                 `may be corrupt.`,
+        );
+    }
+}
+
+/**
+ * Asserts that `keys` are the mint's **supply** keys — that their ElGamal public
+ * key matches the `supplyElgamalPubkey` baked into its `ConfidentialMintBurn`
+ * extension (see `getConfidentialMintBurnSupplyElgamalPubkey`).
+ *
+ * The supply-side counterpart to {@link assertConfidentialKeysMatchAccount}, and
+ * the more likely mistake of the two: supply keys are the standard wallet-only
+ * keys of a *dedicated supply-authority wallet*, so nothing about the mint or the
+ * mint authority can re-derive them — presenting the wrong wallet is an ordinary
+ * slip. Unguarded it surfaces as an on-chain proof rejection from deep inside the
+ * upstream mint helper, which reads as a program bug rather than a wrong key.
+ *
+ * @param mint - The mint being operated on, for the error message.
+ */
+export function assertConfidentialKeysMatchSupply(
+    keys: ConfidentialKeys,
+    registeredSupplyElgamalPubkey: Address,
+    mint: Address,
+): void {
+    const derived = derivedElgamalAddress(keys);
+    if (derived !== registeredSupplyElgamalPubkey) {
+        throw new Error(
+            `The provided supply keys' ElGamal public key (${derived}) does not match mint ${mint}'s ` +
+                `registered supply key (${registeredSupplyElgamalPubkey}). Supply keys are ` +
+                `\`deriveConfidentialKeys({ signer: supplyAuthority })\` for the wallet the mint was created ` +
+                `with — most likely a different wallet signed the derivation. Derivation is wallet-only, so ` +
+                `neither the mint address nor the mint authority can re-derive them: the supply-authority ` +
+                `wallet itself must sign.`,
         );
     }
 }

@@ -221,7 +221,7 @@ confidential-transfer authority before use).
 
 ```ts
 import { Token } from '@solana/mosaic-sdk';
-import { getConfidentialMintBurnInit, deriveConfidentialSupplyKeys } from '@solana/mosaic-sdk/confidential';
+import { getConfidentialMintBurnInit, deriveConfidentialKeys } from '@solana/mosaic-sdk/confidential';
 
 // Confidential balances + transfers only
 const tx = await new Token()
@@ -229,9 +229,15 @@ const tx = await new Token()
     .buildTransaction({ rpc, decimals: 2, mintAuthority, mint, feePayer });
 
 // To also support confidential mint & burn, pair it with the ConfidentialMintBurn
-// extension. Its init values come from the mint authority's supply keys, so derive
-// those first and bake them into the mint.
-const supplyKeys = await deriveConfidentialSupplyKeys({ signer: mintAuthority, mint: mint.address });
+// extension. Its init values come from the mint's supply keys, so derive those
+// first and bake them into the mint.
+//
+// Supply keys are the ordinary wallet-only keys of a *dedicated supply-authority
+// wallet*. Do NOT reuse a wallet that holds confidential balances: derivation is
+// wallet-only, so that wallet's balance keys and this mint's supply keys would be
+// the same key. The supply keypair is proof material, never an on-chain signer, so
+// it does not have to be the mint authority.
+const supplyKeys = await deriveConfidentialKeys({ signer: supplyAuthority });
 const tx2 = await new Token()
     .withConfidentialBalances({ authority: mintAuthority.address, policy: 'opt-in' })
     .withConfidentialMintBurn(getConfidentialMintBurnInit(supplyKeys))
