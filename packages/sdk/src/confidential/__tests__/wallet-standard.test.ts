@@ -5,20 +5,18 @@ jest.mock('@wallet-standard/core', () => ({
 import type { Address } from '@solana/kit';
 import { createSignableMessage, generateKeyPairSigner } from '@solana/kit';
 import { getWallets } from '@wallet-standard/core';
-import { AeKey, ElGamalSecretKey } from '@solana/zk-sdk/node';
-import { createKeyPairMessageSigner, deriveConfidentialKeysForOwnerMint, freeConfidentialKeys } from '../keys.js';
+import { ConfidentialKeys } from '@solana/zk-sdk/node';
+import { createKeyPairMessageSigner, deriveConfidentialKeys, freeConfidentialKeys } from '../keys.js';
 import { createMessageSigner, createResilientSignMessage, signMessageViaWalletStandard } from '../wallet-standard.js';
 import type { SignMessage } from '../keys.js';
 
 const mockGetWallets = getWallets as jest.Mock;
 
 const OWNER = 'FAKE_OWNER_ADDRESS' as Address;
-// A realistic canonical key-derivation message (arbitrary seed — these tests
-// don't care which scheme produced it, only that it carries a recognised
-// domain separator).
-const MESSAGE = ElGamalSecretKey.signerMessage(new Uint8Array([1, 2, 3]));
+// The one and only canonical key-derivation message: the wallet-only scheme
+// has no seed, so this is always ConfidentialKeys.signerMessage(empty).
+const MESSAGE = ConfidentialKeys.signerMessage(new Uint8Array(0));
 const ARBITRARY_MESSAGE = new Uint8Array([1, 2, 3]);
-const MINT_A = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as Address;
 
 /** A well-formed (64-byte) detached Ed25519 signature, distinguishable by its fill value. */
 function fakeSignature(fill: number): Uint8Array {
@@ -216,21 +214,6 @@ describe('signMessageViaWalletStandard: signature shape normalization', () => {
 });
 
 describe('signMessageViaWalletStandard: canonical message enforcement', () => {
-    it('accepts an AeKey derivation message alongside an ElGamal one', async () => {
-        const signature = fakeSignature(9);
-        const aeMessage = AeKey.signerMessage(new Uint8Array([1, 2, 3]));
-        setWallets([
-            fakeWallet(
-                OWNER,
-                jest.fn(async () => signature),
-            ),
-        ]);
-
-        const result = await signMessageViaWalletStandard(OWNER, aeMessage);
-
-        expect(result).toEqual(signature);
-    });
-
     it('refuses to sign an arbitrary message, without ever calling the wallet', async () => {
         const signMessage = jest.fn();
         setWallets([fakeWallet(OWNER, signMessage)]);
@@ -270,7 +253,7 @@ describe('createMessageSigner', () => {
     });
 });
 
-describe('integration with deriveConfidentialKeysForOwnerMint', () => {
+describe('integration with deriveConfidentialKeys', () => {
     // Guards against a shape-normalization bug silently corrupting real key
     // derivation: forces the fallback path (empty Wallet Standard registry) and
     // asserts the derived keys are byte-identical to the plain, non-resilient path.
@@ -281,8 +264,8 @@ describe('integration with deriveConfidentialKeysForOwnerMint', () => {
 
         const resilientSigner = createMessageSigner(owner, resilientOrThrow(owner, realSign));
 
-        const viaResilient = await deriveConfidentialKeysForOwnerMint({ signer: resilientSigner, owner, mint: MINT_A });
-        const viaDirect = await deriveConfidentialKeysForOwnerMint({ signer, owner, mint: MINT_A });
+        const viaResilient = await deriveConfidentialKeys({ signer: resilientSigner });
+        const viaDirect = await deriveConfidentialKeys({ signer });
 
         expect(viaResilient.elgamal.pubkey().toBytes()).toEqual(viaDirect.elgamal.pubkey().toBytes());
         expect(viaResilient.aes.toBytes()).toEqual(viaDirect.aes.toBytes());

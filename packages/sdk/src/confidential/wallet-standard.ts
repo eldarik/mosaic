@@ -1,12 +1,13 @@
 import type { Address, MessagePartialSigner, SignableMessage, SignatureBytes } from '@solana/kit';
 import { getWallets } from '@wallet-standard/core';
-import { AeKey, ElGamalSecretKey } from '@solana/mosaic-sdk/_zk';
+import { ConfidentialKeys as ZkConfidentialKeys } from '@solana/mosaic-sdk/_zk';
 import type { SignMessage } from './keys.js';
+import { isSignerRejection } from './signer-errors.js';
 
 /**
- * The confidential key derivation (`deriveConfidentialKeysForOwnerMint` /
- * `deriveConfidentialSupplyKeys`) signs a canonical, domain-separated message
- * and feeds the raw Ed25519 signature into the WASM ZK SDK. It expects a kit
+ * The confidential key derivation (`deriveConfidentialKeys` in `./keys.js`)
+ * signs a canonical, wallet-only message and feeds the raw Ed25519 signature
+ * into the WASM ZK SDK. It expects a kit
  * {@link MessagePartialSigner} (`signMessages([SignableMessage]) -> [{
  * [address]: SignatureBytes }]`).
  *
@@ -87,49 +88,23 @@ function extractSignature(result: unknown, message: Uint8Array): Uint8Array {
     return signature;
 }
 
-/**
- * Did the user dismiss the wallet prompt, rather than the signer refusing the
- * message outright? A cancellation must not be reported as an incompatibility.
- */
-function isSignerRejection(error: unknown): boolean {
-    if ((error as { code?: unknown } | null)?.code === 4001) return true;
-    return /reject|denied|declin|cancel/i.test(describeError(error));
-}
-
-function describeError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error ?? 'unknown error');
-}
-
-// `ElGamalSecretKey.signerMessage(seed)` / `AeKey.signerMessage(seed)` are always
-// `domainSeparator + seed`; calling them with an empty seed yields the bare
-// domain separator, which every canonical key-derivation message must start
-// with regardless of what seed (token account, owner, owner+mint, ...) is in
-// use. This lets `assertCanonicalDerivationMessage` recognise a real
-// derivation message without hard-coding — or needing to agree with upstream
-// on — the seed scheme itself.
-const ELGAMAL_MESSAGE_PREFIX = ElGamalSecretKey.signerMessage(new Uint8Array(0));
-const AE_MESSAGE_PREFIX = AeKey.signerMessage(new Uint8Array(0));
-
-function hasPrefix(message: Uint8Array, prefix: Uint8Array): boolean {
-    if (message.length < prefix.length) return false;
-    for (let i = 0; i < prefix.length; i++) {
-        if (message[i] !== prefix[i]) return false;
-    }
-    return true;
-}
+// `deriveConfidentialKeys` (`./keys.js`) always signs
+// `ConfidentialKeys.signerMessage(new Uint8Array(0))` — the wallet-only scheme
+// has no seed, so this is the one and only canonical derivation message, not
+// just a prefix a seed gets appended to.
+const CANONICAL_MESSAGE = ZkConfidentialKeys.signerMessage(new Uint8Array(0));
 
 /**
- * This module exists only to sign confidential-balance key-derivation
- * messages (see `deriveConfidentialKeys` / `deriveConfidentialKeysForOwnerMint`
- * in `./keys.js`) — not to be a general-purpose "sign anything via Wallet
- * Standard" utility. Refuses anything that isn't one, so a caller can't be
- * tricked (or accidentally used) into blind-signing an arbitrary message
- * under the `confidential/` banner.
+ * This module exists only to sign the confidential-balance key-derivation
+ * message (see `deriveConfidentialKeys` in `./keys.js`) — not to be a
+ * general-purpose "sign anything via Wallet Standard" utility. Refuses
+ * anything that isn't it, so a caller can't be tricked (or accidentally used)
+ * into blind-signing an arbitrary message under the `confidential/` banner.
  */
 function assertCanonicalDerivationMessage(message: Uint8Array): void {
-    if (hasPrefix(message, ELGAMAL_MESSAGE_PREFIX) || hasPrefix(message, AE_MESSAGE_PREFIX)) return;
+    if (bytesEqual(message, CANONICAL_MESSAGE)) return;
     throw new Error(
-        'signMessageViaWalletStandard only signs confidential-balance key-derivation messages; ' +
+        'signMessageViaWalletStandard only signs the confidential-balance key-derivation message; ' +
             'refusing to sign an unrecognised message.',
     );
 }
@@ -221,8 +196,7 @@ export function createResilientSignMessage(
 
 /**
  * Wraps a single-message {@link SignMessage} into a kit {@link MessagePartialSigner}
- * bound to `address`, so it can drive `deriveConfidentialKeysForOwnerMint` /
- * `deriveConfidentialSupplyKeys`.
+ * bound to `address`, so it can drive `deriveConfidentialKeys`.
  */
 export function createMessageSigner(address: Address, signMessage: SignMessage): MessagePartialSigner {
     return {

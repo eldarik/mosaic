@@ -1,6 +1,5 @@
 export {
     deriveConfidentialKeys,
-    deriveConfidentialKeysForOwnerMint,
     createKeyPairMessageSigner,
     freeConfidentialKeys,
     decryptAesBalance,
@@ -8,7 +7,6 @@ export {
     type SignMessage,
     type ConfidentialKeys,
     type DeriveConfidentialKeysInput,
-    type DeriveConfidentialKeysForOwnerMintInput,
 } from './keys.js';
 
 export { createConfidentialTransactionPlanner, planConfidentialInstructions } from './plan.js';
