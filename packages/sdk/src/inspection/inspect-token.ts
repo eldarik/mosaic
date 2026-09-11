@@ -252,7 +252,7 @@ export async function inspectToken(
                 case 'ConfidentialMintBurn':
                     // Separate extension from ConfidentialTransferMint: enables
                     // minting into / burning from a confidential balance. The
-                    // supply is tracked under the mint authority's supply keys.
+                    // supply is tracked under the supply authority's keys.
                     extensionDetails.supplyElgamalPubkey = ext.supplyElgamalPubkey;
                     // Base64, not the raw byte array: every other extension
                     // contributes scalars/addresses to `details`, so a Uint8Array

@@ -276,11 +276,13 @@ deterministic, never stored on-chain, and **wallet-only**: there is no owner/min
 token-account seed, so the same signer always derives the same account keys for
 every mint and token account it holds.
 
-> The mint authority's **supply** keys (step 1) are a separate derivation, bound to
-> `(mintAuthority, mint)` under their own domain tag, so a mint authority that also
-> holds a confidential account of its own mint gets two independent key sets. Sharing
-> account keys — with an auditor, with support, in a backup — therefore never exposes
-> the total-supply keys.
+> A mint's **supply** keys (step 1) are not a separate derivation — they are this
+> same wallet-only derivation run against a _dedicated supply-authority wallet_.
+> Because a wallet has exactly one confidential key pair, there is no in-wallet
+> separation to rely on: reusing a balance-holding wallet as the supply authority
+> makes its balance keys and the total-supply keys the same key, so sharing account
+> keys — with an auditor, with support, in a backup — would hand over the supply too.
+> Use a separate wallet. The same applies to an auditor key.
 
 ```ts
 import { deriveConfidentialKeys, freeConfidentialKeys } from '@solana/mosaic-sdk/confidential';
@@ -399,8 +401,11 @@ const empty = await createEmptyConfidentialAccountInstructionPlan({
 ### 5. Confidential mint & burn
 
 Requires a mint created with both `withConfidentialBalances` and
-`withConfidentialMintBurn` (see step 1). `supplyKeys` are the mint authority's
-supply keys; `keys` are the holder's account keys.
+`withConfidentialMintBurn` (see step 1). `supplyKeys` are the supply authority's
+keys — the dedicated wallet the mint was created with, checked against the mint's
+registered supply pubkey before any proof is built; `keys` are the holder's account
+keys. The `authority` signing these instructions is still the mint authority, which
+need not be the same wallet.
 
 ```ts
 import {
