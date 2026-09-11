@@ -57,3 +57,22 @@ jobs:
       - name: Test Integration
         if: matrix.node-version == '20.x'
         run: pnpm run test:integration
+
+  # A release PR is one that bumps package versions. `changeset version` also
+  # deletes the changesets it consumed, and publish-packages.yml refuses to
+  # publish while any remain — silently, since a skipped job reports green.
+  # Catch that here, on the PR, rather than after the merge. Deliberately a
+  # separate job with no pnpm install: it answers in seconds instead of queuing
+  # behind the build and the integration suite.
+  release-consistency:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check release consistency
+        run: ./scripts/check-release-consistency.sh "${{ github.event.pull_request.base.sha }}"
