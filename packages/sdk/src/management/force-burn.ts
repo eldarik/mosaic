@@ -62,7 +62,7 @@ export const createForceBurnTransaction = async (
     // plaintext Burn — including a permanent-delegate force burn (IllegalMintBurnConversion).
     // Fail fast with an actionable message rather than building a transaction the chain
     // would reject.
-    if (mintHasConfidentialMintBurnExtension(extensions)) {
+    if (await mintHasConfidentialMintBurnExtension(rpc, mint, extensions)) {
         throw confidentialMintBurnConversionError(mint, 'plaintext burning', 'createConfidentialBurnInstructionPlan');
     }
 

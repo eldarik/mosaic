@@ -246,12 +246,11 @@ export async function getMintDetails(rpc: Rpc<SolanaRpcApi>, mint: Address, comm
  * building a transaction the chain would reject.
  *
  * This does its own `fetchMint` and decodes the mint with the Codama decoder, so
- * unlike {@link mintHasConfidentialMintBurnExtension} it does not depend on the
- * RPC node recognizing the extension in `jsonParsed` output. Use it for a
- * standalone check, or where a false negative would be worse than a second mint
- * read. Builders that already fetch the mint via {@link getMintDetails} pass the
- * decoded `extensions` to `mintHasConfidentialMintBurnExtension` instead, to
- * avoid that extra read.
+ * it never depends on the RPC node recognizing the extension in `jsonParsed`
+ * output. Use it for a standalone check. Builders that already fetch the mint via
+ * {@link getMintDetails} call `mintHasConfidentialMintBurnExtension` with the
+ * jsonParsed `extensions` instead, which answers from that fetch alone and only
+ * falls back here when the node returned an unparseable extension.
  *
  * @param rpc - The Solana RPC client instance
  * @param mint - The mint address
@@ -293,26 +292,38 @@ export function getPermissionedBurnAuthorityFromMint(mint: DecodedMint): Address
 }
 
 /**
- * Pure counterpart to {@link isConfidentialMintBurnMint}: checks the jsonParsed
+ * Cheap counterpart to {@link isConfidentialMintBurnMint}: checks the jsonParsed
  * extensions already returned by {@link getMintDetails} for `confidentialMintBurn`,
  * so a caller that has fetched the mint doesn't need a second read to fail fast.
  *
  * The key matches Agave's `UiExtension` serialization (`rename_all = "camelCase"`,
- * `tag = "extension"`). An RPC node too old to know the extension emits
- * `unparseableExtension` instead of `confidentialMintBurn`, so this also treats
- * `unparseableExtension` as a potential match — fail-safe rather than fail-open:
- * a mint that turns out not to be `ConfidentialMintBurn` just makes the guard
- * over-fire, while a false negative here would let the on-chain
- * `IllegalMintBurnConversion` surface instead. {@link isConfidentialMintBurnMint}
- * decodes the mint directly and doesn't need this fallback.
+ * `tag = "extension"`). An RPC node too old to know an extension emits
+ * `unparseableExtension` for it — but it does that for *every* extension it
+ * doesn't recognize, not just `ConfidentialMintBurn` (Mosaic's own templates
+ * enable `PermissionedBurn`, `PausableConfig` and `ScaledUiAmountConfig`, all
+ * recent enough to come back unparseable from a lagging node). Treating that as
+ * a match would disable minting and burning outright for those mints, so the
+ * ambiguous case falls through to {@link isConfidentialMintBurnMint}, whose
+ * Codama decode is node-independent. That costs one extra mint read only on the
+ * nodes that actually return an unparseable extension.
  *
+ * @param rpc - The Solana RPC client instance, for resolving an unparseable extension
+ * @param mint - The mint address, for resolving an unparseable extension
  * @param extensions - The jsonParsed extensions from {@link getMintDetails}
- * @returns True if the mint has (or may have, per an unparseable RPC node) the ConfidentialMintBurn extension
+ * @returns Promise resolving to true if the mint has the ConfidentialMintBurn extension
  */
-export function mintHasConfidentialMintBurnExtension(
+export async function mintHasConfidentialMintBurnExtension(
+    rpc: Rpc<SolanaRpcApi>,
+    mint: Address,
     extensions: Array<{ extension: string; state?: Record<string, unknown> }>,
-): boolean {
-    return extensions.some(ext => ext.extension === 'confidentialMintBurn' || ext.extension === 'unparseableExtension');
+): Promise<boolean> {
+    if (extensions.some(ext => ext.extension === 'confidentialMintBurn')) {
+        return true;
+    }
+    if (!extensions.some(ext => ext.extension === 'unparseableExtension')) {
+        return false;
+    }
+    return isConfidentialMintBurnMint(rpc, mint);
 }
 
 /**

@@ -221,7 +221,11 @@ confidential-transfer authority before use).
 
 ```ts
 import { Token } from '@solana/mosaic-sdk';
-import { getConfidentialMintBurnInit, deriveConfidentialKeys } from '@solana/mosaic-sdk/confidential';
+import {
+    getConfidentialMintBurnInit,
+    deriveConfidentialKeys,
+    freeConfidentialKeys,
+} from '@solana/mosaic-sdk/confidential';
 
 // Confidential balances + transfers only
 const tx = await new Token()
