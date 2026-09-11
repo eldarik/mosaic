@@ -48,7 +48,7 @@ export async function createConfidentialWithdrawInstructionPlan(input: {
         fetchToken(input.rpc, input.tokenAccount),
     ]);
 
-    if (mintHasConfidentialMintBurnExtension(extensions)) {
+    if (await mintHasConfidentialMintBurnExtension(input.rpc, input.mint, extensions)) {
         throw confidentialMintBurnConversionError(input.mint, 'confidential withdrawal', null);
     }
     const registeredElgamalPubkey = getConfidentialTransferAccountElgamalPubkey(decoded);

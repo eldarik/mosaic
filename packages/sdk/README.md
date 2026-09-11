@@ -221,7 +221,11 @@ confidential-transfer authority before use).
 
 ```ts
 import { Token } from '@solana/mosaic-sdk';
-import { getConfidentialMintBurnInit, deriveConfidentialSupplyKeys } from '@solana/mosaic-sdk/confidential';
+import {
+    getConfidentialMintBurnInit,
+    deriveConfidentialKeys,
+    freeConfidentialKeys,
+} from '@solana/mosaic-sdk/confidential';
 
 // Confidential balances + transfers only
 const tx = await new Token()
@@ -229,9 +233,15 @@ const tx = await new Token()
     .buildTransaction({ rpc, decimals: 2, mintAuthority, mint, feePayer });
 
 // To also support confidential mint & burn, pair it with the ConfidentialMintBurn
-// extension. Its init values come from the mint authority's supply keys, so derive
-// those first and bake them into the mint.
-const supplyKeys = await deriveConfidentialSupplyKeys({ signer: mintAuthority, mint: mint.address });
+// extension. Its init values come from the mint's supply keys, so derive those
+// first and bake them into the mint.
+//
+// Supply keys are the ordinary wallet-only keys of a *dedicated supply-authority
+// wallet*. Do NOT reuse a wallet that holds confidential balances: derivation is
+// wallet-only, so that wallet's balance keys and this mint's supply keys would be
+// the same key. The supply keypair is proof material, never an on-chain signer, so
+// it does not have to be the mint authority.
+const supplyKeys = await deriveConfidentialKeys({ signer: supplyAuthority });
 const tx2 = await new Token()
     .withConfidentialBalances({ authority: mintAuthority.address, policy: 'opt-in' })
     .withConfidentialMintBurn(getConfidentialMintBurnInit(supplyKeys))
@@ -265,25 +275,36 @@ freeConfidentialKeys(supplyKeys); // once you no longer need them for mint/burn
 
 ### 2. Derive account keys
 
-Each holder derives ElGamal + AES keys bound to `(owner, mint)` from a signature —
-they are deterministic and never stored on-chain. One signature yields both keys.
+Each holder derives an ElGamal keypair + AES key from a single wallet signature —
+deterministic, never stored on-chain, and **wallet-only**: there is no owner/mint/
+token-account seed, so the same signer always derives the same account keys for
+every mint and token account it holds.
 
-> Account keys and the mint authority's **supply** keys (step 1) use separate
-> derivation domains, so a mint authority that also holds a confidential account of its
-> own mint gets two independent key sets. Sharing account keys — with an auditor, with
-> support, in a backup — therefore never exposes the total-supply keys.
+> A mint's **supply** keys (step 1) are not a separate derivation — they are this
+> same wallet-only derivation run against a _dedicated supply-authority wallet_.
+> Because a wallet has exactly one confidential key pair, there is no in-wallet
+> separation to rely on: reusing a balance-holding wallet as the supply authority
+> makes its balance keys and the total-supply keys the same key, so sharing account
+> keys — with an auditor, with support, in a backup — would hand over the supply too.
+> Use a separate wallet. The same applies to an auditor key.
 
 ```ts
-import { deriveConfidentialKeysForOwnerMint, freeConfidentialKeys } from '@solana/mosaic-sdk/confidential';
+import { deriveConfidentialKeys, freeConfidentialKeys } from '@solana/mosaic-sdk/confidential';
 
-const keys = await deriveConfidentialKeysForOwnerMint({
+const keys = await deriveConfidentialKeys({
     signer: owner, // a MessagePartialSigner (wallet / filesystem keypair)
-    owner: owner.address,
-    mint: 'MintPubkey...',
 });
 // ... use keys ...
 freeConfidentialKeys(keys); // release WASM memory when done
 ```
+
+> **Browser wallets.** Don't feed a UI wallet-connection framework's own `signMessage`
+> straight into `signer` above — several such libraries mishandle the Wallet
+> Standard `solana:signMessage` result or silently demote specific wallets to a
+> broken signing path. Import `@solana/mosaic-sdk/confidential/wallet-standard`
+> and wrap your framework's fallback signer with `createResilientSignMessage(owner,
+fallbackSignMessage)`, then `createMessageSigner(owner, signMessage)` to get the
+> `MessagePartialSigner` this function needs.
 
 ### 3. Configure the account
 
@@ -384,8 +405,11 @@ const empty = await createEmptyConfidentialAccountInstructionPlan({
 ### 5. Confidential mint & burn
 
 Requires a mint created with both `withConfidentialBalances` and
-`withConfidentialMintBurn` (see step 1). `supplyKeys` are the mint authority's
-supply keys; `keys` are the holder's account keys.
+`withConfidentialMintBurn` (see step 1). `supplyKeys` are the supply authority's
+keys — the dedicated wallet the mint was created with, checked against the mint's
+registered supply pubkey before any proof is built; `keys` are the holder's account
+keys. The `authority` signing these instructions is still the mint authority, which
+need not be the same wallet.
 
 ```ts
 import {

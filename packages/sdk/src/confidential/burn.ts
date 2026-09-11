@@ -191,7 +191,11 @@ export function createApplyConfidentialPendingBurnInstructionPlan(input: {
      * yourself.
      */
     resyncSupply?: {
-        /** The mint authority's supply keys (the AES key encrypts the decryptable supply). */
+        /**
+         * The mint's supply keys, from the **supply authority** wallet (the AES key
+         * encrypts the decryptable supply). Not a signer, so it need not be the
+         * same wallet as `authority`.
+         */
         supplyKeys: ConfidentialKeys;
         /**
          * The true total supply **after** this apply, in raw base units. Asserted,

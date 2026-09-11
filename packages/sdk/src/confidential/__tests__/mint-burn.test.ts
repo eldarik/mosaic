@@ -91,13 +91,22 @@ const ACCOUNT_EXT = {
     decryptableAvailableBalance: new Uint8Array(36),
 };
 
+/** A `ConfidentialKeys` stand-in whose ElGamal pubkey decodes back to `address`. */
+const fakeKeysFor = (address: Address, tag: string) => {
+    const bytes = new Uint8Array(getAddressEncoder().encode(address));
+    return {
+        elgamal: { tag: `${tag}-elgamal`, pubkey: () => ({ toBytes: () => bytes, free: jest.fn() }) },
+        aes: { tag: `${tag}-aes` },
+    } as unknown as ConfidentialKeys;
+};
+
 // `assertConfidentialKeysMatchAccount` (burn.ts) compares `elgamal.pubkey().toBytes()`
 // against `ACCOUNT_EXT.elgamalPubkey`, so the fake pubkey must decode back to it.
-const fakeElgamalPubkeyBytes = new Uint8Array(getAddressEncoder().encode(ACCOUNT_PK));
-const fakeKeys = {
-    elgamal: { tag: 'elgamal', pubkey: () => ({ toBytes: () => fakeElgamalPubkeyBytes, free: jest.fn() }) },
-    aes: { tag: 'aes' },
-} as unknown as ConfidentialKeys;
+const fakeKeys = fakeKeysFor(ACCOUNT_PK, 'account');
+// Supply keys are a *different wallet's* keys now, so they decode to the mint's
+// registered `supplyElgamalPubkey` instead — `assertConfidentialKeysMatchSupply`
+// (mint.ts) checks exactly that.
+const fakeSupplyKeys = fakeKeysFor(SUPPLY_PK, 'supply');
 
 describe('confidential mint (wrapper)', () => {
     let rpc: ReturnType<typeof createMockRpc>;
@@ -119,7 +128,7 @@ describe('confidential mint (wrapper)', () => {
             destinationToken: DEST_TOKEN,
             authority: AUTHORITY,
             amount: '2',
-            supplyKeys: fakeKeys,
+            supplyKeys: fakeSupplyKeys,
         });
 
         expect(plan).toBe(mintPlan);
@@ -133,8 +142,8 @@ describe('confidential mint (wrapper)', () => {
         // Amount scaled to raw by the wrapper (2 * 10^6).
         expect(arg.amount).toBe(2_000_000n);
         // Supply keys threaded through as separate ElGamal/AES params.
-        expect(arg.supplyElgamalKeypair).toBe(fakeKeys.elgamal);
-        expect(arg.supplyAesKey).toBe(fakeKeys.aes);
+        expect(arg.supplyElgamalKeypair).toBe(fakeSupplyKeys.elgamal);
+        expect(arg.supplyAesKey).toBe(fakeSupplyKeys.aes);
         expect(arg.auditorElgamalPubkey).toBeUndefined();
     });
 
@@ -146,7 +155,7 @@ describe('confidential mint (wrapper)', () => {
             destinationToken: DEST_TOKEN,
             authority: AUTHORITY,
             amount: '2',
-            supplyKeys: fakeKeys,
+            supplyKeys: fakeSupplyKeys,
             auditorElgamalPubkey: SUPPLY_PK,
         });
         const arg = mockGetConfidentialMintInstructionPlan.mock.calls[0][0] as any;
@@ -163,7 +172,7 @@ describe('confidential mint (wrapper)', () => {
                 destinationToken: DEST_TOKEN,
                 authority: AUTHORITY,
                 amount: '2',
-                supplyKeys: fakeKeys,
+                supplyKeys: fakeSupplyKeys,
             }),
         ).rejects.toThrow(/ConfidentialMintBurn/);
         expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
@@ -179,7 +188,7 @@ describe('confidential mint (wrapper)', () => {
                 destinationToken: DEST_TOKEN,
                 authority: AUTHORITY,
                 amount: '2',
-                supplyKeys: fakeKeys,
+                supplyKeys: fakeSupplyKeys,
             }),
         ).rejects.toThrow(/ConfidentialTransferMint/);
         expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
@@ -195,9 +204,28 @@ describe('confidential mint (wrapper)', () => {
                 destinationToken: DEST_TOKEN,
                 authority: AUTHORITY,
                 amount: '2',
-                supplyKeys: fakeKeys,
+                supplyKeys: fakeSupplyKeys,
             }),
         ).rejects.toThrow(/ConfidentialTransferAccount/);
+        expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
+    });
+
+    // Supply keys belong to a dedicated supply-authority wallet and cannot be
+    // re-derived from the mint, so presenting another wallet's keys is the likely
+    // slip. Caught here rather than as an on-chain proof rejection upstream.
+    it("rejects supply keys that are not the mint's registered supply keys", async () => {
+        await expect(
+            createConfidentialMintInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                destinationToken: DEST_TOKEN,
+                authority: AUTHORITY,
+                amount: '2',
+                // The account holder's keys, not the supply authority's.
+                supplyKeys: fakeKeys,
+            }),
+        ).rejects.toThrow(/registered supply key/);
         expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
     });
 });
@@ -400,7 +428,7 @@ describe('apply confidential pending burn', () => {
         const plan: any = createApplyConfidentialPendingBurnInstructionPlan({
             mint: MINT,
             authority: AUTHORITY,
-            resyncSupply: { supplyKeys: fakeKeys, rawSupply: 250n },
+            resyncSupply: { supplyKeys: fakeSupplyKeys, rawSupply: 250n },
         });
 
         expect(plan.kind).toBe('sequential');
@@ -415,14 +443,14 @@ describe('apply confidential pending burn', () => {
         createApplyConfidentialPendingBurnInstructionPlan({
             mint: MINT,
             authority: AUTHORITY,
-            resyncSupply: { supplyKeys: fakeKeys, rawSupply: 250n },
+            resyncSupply: { supplyKeys: fakeSupplyKeys, rawSupply: 250n },
         });
 
         expect(mockGetUpdateDecryptableSupplyInstruction).toHaveBeenCalledTimes(1);
         const args: any = mockGetUpdateDecryptableSupplyInstruction.mock.calls[0][0];
         expect(args.mint).toBe(MINT);
         expect(args.authority.address).toBe(AUTHORITY);
-        expect(args.supplyAesKey).toBe(fakeKeys.aes);
+        expect(args.supplyAesKey).toBe(fakeSupplyKeys.aes);
         expect(args.supply).toBe(250n);
     });
 
@@ -431,7 +459,7 @@ describe('apply confidential pending burn', () => {
             createApplyConfidentialPendingBurnInstructionPlan({
                 mint: MINT,
                 authority: AUTHORITY,
-                resyncSupply: { supplyKeys: fakeKeys, rawSupply: 2n ** 64n },
+                resyncSupply: { supplyKeys: fakeSupplyKeys, rawSupply: 2n ** 64n },
             }),
         ).toThrow('rawSupply must be a u64');
     });

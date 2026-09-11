@@ -57,13 +57,14 @@ export interface ConfidentialBalancesOptions {
 
 export interface ConfidentialMintBurnOptions {
     /**
-     * The mint authority's **supply** ElGamal public key — the encrypted total
-     * supply is maintained under it, and it backs the mint/burn equality proof.
-     * A supply key, not an account balance key: `deriveConfidentialSupplyKeys`
-     * binds it to `(mintAuthority, mint)` under its own domain tag, so it is
-     * distinct from any account keys the same authority derives for this mint.
-     * Derive it alongside {@link getConfidentialMintBurnInit} in
-     * `@solana/mosaic-sdk/confidential`.
+     * The **supply** ElGamal public key — the encrypted total supply is maintained
+     * under it, and it backs the mint/burn equality proof. Produced by
+     * `deriveConfidentialKeys({ signer: supplyAuthority })` in
+     * `@solana/mosaic-sdk/confidential`, via `getConfidentialMintBurnInit`.
+     *
+     * The supply authority should be a **dedicated wallet**: key derivation is
+     * wallet-only, so any wallet that also holds confidential balances would have
+     * the very same key protecting both its balances and this mint's supply.
      */
     supplyElgamalPubkey: Address;
     /**
@@ -201,8 +202,9 @@ export class Token {
      * {@link Token.withConfidentialBalances}.
      *
      * The total supply is maintained as an encrypted (ElGamal) value plus a
-     * cheap-to-decrypt AES "decryptable supply", both under the mint authority's
-     * dedicated **supply keys**. Derive those keys and compute the two init
+     * cheap-to-decrypt AES "decryptable supply", both under the mint's **supply
+     * keys** — the wallet-only keys of a dedicated *supply authority* wallet.
+     * Derive those keys with `deriveConfidentialKeys` and compute the two init
      * values with `getConfidentialMintBurnInit` from
      * `@solana/mosaic-sdk/confidential` (kept out of this WASM-free module).
      *

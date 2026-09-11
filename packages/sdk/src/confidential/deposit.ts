@@ -39,7 +39,7 @@ export async function createConfidentialDepositInstructionPlan(input: {
 }): Promise<InstructionPlan> {
     const { rawAmount, decimals, extensions } = await resolveRawAmount(input.rpc, input.mint, input.amount);
 
-    if (mintHasConfidentialMintBurnExtension(extensions)) {
+    if (await mintHasConfidentialMintBurnExtension(input.rpc, input.mint, extensions)) {
         throw confidentialMintBurnConversionError(input.mint, 'confidential deposit', null);
     }
 

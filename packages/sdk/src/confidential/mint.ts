@@ -8,8 +8,13 @@ import {
 } from '@solana/kit';
 import { fetchMint, fetchToken } from '@solana-program/token-2022';
 import { getConfidentialMintInstructionPlan } from '@solana-program/token-2022/confidential';
-import { isConfidentialMintBurn, isConfidentialTransferAccount, isConfidentialTransferMint } from './extensions.js';
-import type { ConfidentialKeys } from './keys.js';
+import {
+    getConfidentialMintBurnSupplyElgamalPubkey,
+    isConfidentialMintBurn,
+    isConfidentialTransferAccount,
+    isConfidentialTransferMint,
+} from './extensions.js';
+import { assertConfidentialKeysMatchSupply, type ConfidentialKeys } from './keys.js';
 import { type TokenAmount, tokenAmountToRaw, toAuthoritySigner } from './util.js';
 
 /**
@@ -41,7 +46,12 @@ export async function createConfidentialMintInstructionPlan(input: {
     authority: Address | TransactionSigner;
     /** Amount to mint — decimal string (e.g. `"1.5"`) or raw `bigint`. */
     amount: TokenAmount;
-    /** The mint authority's supply keys (ElGamal keypair + AES key). */
+    /**
+     * The mint's supply keys (ElGamal keypair + AES key) — `deriveConfidentialKeys`
+     * for the **supply authority**, the dedicated wallet the mint was created with.
+     * Proof material, not a signer, so it need not be the mint `authority`.
+     * Checked against the mint's registered supply pubkey before use.
+     */
     supplyKeys: ConfidentialKeys;
     /** Override the auditor pubkey; defaults to the mint's configured auditor. */
     auditorElgamalPubkey?: Address;
@@ -73,6 +83,13 @@ export async function createConfidentialMintInstructionPlan(input: {
                 `(missing the ConfidentialTransferAccount extension). Configure it first with ` +
                 `createConfigureConfidentialAccountInstructionPlan.`,
         );
+    }
+    // Supply keys come from a dedicated supply-authority wallet and cannot be
+    // re-derived from the mint, so the wrong wallet is an easy mistake — catch it
+    // here rather than as an on-chain proof rejection inside the upstream helper.
+    const registeredSupplyPubkey = getConfidentialMintBurnSupplyElgamalPubkey(mintDecoded);
+    if (registeredSupplyPubkey !== null) {
+        assertConfidentialKeysMatchSupply(input.supplyKeys, registeredSupplyPubkey, input.mint);
     }
 
     const amount = tokenAmountToRaw(input.amount, mintDecoded.data.decimals);

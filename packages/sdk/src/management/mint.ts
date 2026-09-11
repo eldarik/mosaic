@@ -53,7 +53,7 @@ export const createMintToTransaction = async (
     // A ConfidentialMintBurn mint keeps its supply encrypted, so Token-2022 rejects
     // plaintext MintTo (IllegalMintBurnConversion). Fail fast with an actionable
     // message rather than building a transaction the chain would reject.
-    if (mintHasConfidentialMintBurnExtension(extensions)) {
+    if (await mintHasConfidentialMintBurnExtension(rpc, mint, extensions)) {
         throw confidentialMintBurnConversionError(mint, 'plaintext minting', 'createConfidentialMintInstructionPlan');
     }
 

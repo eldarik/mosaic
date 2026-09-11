@@ -1,9 +1,8 @@
 export {
     deriveConfidentialKeys,
-    deriveConfidentialKeysForOwnerMint,
-    deriveConfidentialSupplyKeys,
     getConfidentialMintBurnInit,
     assertConfidentialKeysMatchAccount,
+    assertConfidentialKeysMatchSupply,
     createKeyPairMessageSigner,
     freeConfidentialKeys,
     decryptAesBalance,
@@ -11,8 +10,6 @@ export {
     type SignMessage,
     type ConfidentialKeys,
     type DeriveConfidentialKeysInput,
-    type DeriveConfidentialKeysForOwnerMintInput,
-    type DeriveConfidentialSupplyKeysInput,
     type ConfidentialMintBurnInit,
 } from './keys.js';
 

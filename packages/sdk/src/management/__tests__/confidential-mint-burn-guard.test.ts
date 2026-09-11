@@ -29,6 +29,12 @@ const TRANSFER_MINT_EXT = { __kind: 'ConfidentialTransferMint', auditorElgamalPu
 // the ConfidentialMintBurn extension — this is what the builders' guard reads.
 const CONFIDENTIAL_MINT_BURN_JSON_EXT = { extension: 'confidentialMintBurn' };
 
+// What an RPC node emits for ANY extension it is too old to recognize — including
+// PermissionedBurn / PausableConfig / ScaledUiAmountConfig, which Mosaic's own
+// templates enable. Ambiguous on its own, so the guard resolves it by decoding the
+// mint (mockMintExtensions below) rather than assuming a match.
+const UNPARSEABLE_JSON_EXT = { extension: 'unparseableExtension' };
+
 const mint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' as Address;
 const wallet = 'HA3KcFsXNjRJsRZq1P1Y8qPAeSZnZsFyauCDEsSSGqTj' as Address;
 
@@ -100,6 +106,50 @@ describe('confidential mint/burn guard on plaintext mint & burn', () => {
         await expect(createPermissionedBurnTransaction(rpc, mint, wallet, 1, authority, feePayer)).rejects.toThrow(
             /ConfidentialMintBurn extension enabled; plaintext burning is not supported/,
         );
+    });
+
+    describe('mintHasConfidentialMintBurnExtension', () => {
+        test('is true on the parsed extension, without decoding the mint', async () => {
+            mockMintExtensions = [];
+            const { mintHasConfidentialMintBurnExtension } = await import('../../transaction-util.js');
+            await expect(
+                mintHasConfidentialMintBurnExtension(rpc, mint, [CONFIDENTIAL_MINT_BURN_JSON_EXT]),
+            ).resolves.toBe(true);
+        });
+
+        test('is false when the node parsed every extension and none is ConfidentialMintBurn', async () => {
+            mockMintExtensions = [MINT_BURN_EXT]; // would say true — must not be consulted
+            const { mintHasConfidentialMintBurnExtension } = await import('../../transaction-util.js');
+            await expect(
+                mintHasConfidentialMintBurnExtension(rpc, mint, [{ extension: 'pausableConfig' }]),
+            ).resolves.toBe(false);
+        });
+
+        test('resolves an unparseable extension by decoding the mint — true when it really is ConfidentialMintBurn', async () => {
+            mockMintExtensions = [TRANSFER_MINT_EXT, MINT_BURN_EXT];
+            const { mintHasConfidentialMintBurnExtension } = await import('../../transaction-util.js');
+            await expect(mintHasConfidentialMintBurnExtension(rpc, mint, [UNPARSEABLE_JSON_EXT])).resolves.toBe(true);
+        });
+
+        test('resolves an unparseable extension by decoding the mint — false for another unknown extension', async () => {
+            // e.g. PermissionedBurn on a node too old to parse it: the guard must not
+            // fire, or minting and burning would be disabled for the mint outright.
+            mockMintExtensions = [{ __kind: 'PermissionedBurn', authority: { __option: 'None' } }];
+            const { mintHasConfidentialMintBurnExtension } = await import('../../transaction-util.js');
+            await expect(mintHasConfidentialMintBurnExtension(rpc, mint, [UNPARSEABLE_JSON_EXT])).resolves.toBe(false);
+        });
+    });
+
+    test('createMintToTransaction does not reject on an unparseable extension that is not ConfidentialMintBurn', async () => {
+        mockMintExtensions = [{ __kind: 'PermissionedBurn', authority: { __option: 'None' } }];
+        seedMintDetails(rpc, {
+            address: mint,
+            decimals: 6,
+            mintAuthority: wallet,
+            extensions: [UNPARSEABLE_JSON_EXT],
+        });
+        const { createMintToTransaction } = await import('../mint.js');
+        await expect(createMintToTransaction(rpc, mint, wallet, 1, authority, feePayer)).resolves.toBeDefined();
     });
 
     describe('isConfidentialMintBurnMint', () => {
