@@ -21,7 +21,7 @@ import {
     isConfidentialTransferMint,
 } from './extensions.js';
 import { assertConfidentialKeysMatchAccount, type ConfidentialKeys } from './keys.js';
-import { createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan } from './supply.js';
+import { assertConfidentialSupplyKeysForMint, buildUpdateDecryptableSupplyPlan } from './supply.js';
 import { type TokenAmount, tokenAmountToRaw, toAuthoritySigner } from './util.js';
 
 /**
@@ -106,6 +106,8 @@ export async function createConfidentialBurnInstructionPlan(input: {
 
     const amount = tokenAmountToRaw(input.amount, mintDecoded.data.decimals);
 
+    const authoritySigner = toAuthoritySigner(input.authority);
+
     const commonArgs = {
         rpc: input.rpc,
         payer: input.payer,
@@ -113,7 +115,7 @@ export async function createConfidentialBurnInstructionPlan(input: {
         mint: input.mint,
         mintAccount: mintDecoded.data,
         sourceTokenAccount: tokenDecoded.data,
-        authority: toAuthoritySigner(input.authority),
+        authority: authoritySigner,
         amount,
         sourceElgamalKeypair: input.keys.elgamal,
         aesKey: input.keys.aes,
@@ -140,6 +142,21 @@ export async function createConfidentialBurnInstructionPlan(input: {
                     `authority currently configured on the mint (it may have been rotated).`,
             );
         }
+        // Self-burn: the account owner is also the mint's configured burn
+        // authority, so both slots hold the same address. Kit refuses to sign a
+        // transaction that pairs a real signer with a noop signer for one address
+        // ("Multiple distinct signers were identified for address ..."), so
+        // collapse the two slots onto a single signer, preferring whichever side
+        // the caller supplied as a real signer.
+        if (providedAuthority.address === authoritySigner.address) {
+            const sharedAuthority = typeof input.authority === 'string' ? providedAuthority : authoritySigner;
+            return getPermissionedConfidentialBurnInstructionPlan({
+                ...commonArgs,
+                authority: sharedAuthority,
+                permissionedBurnAuthority: sharedAuthority,
+            });
+        }
+
         return getPermissionedConfidentialBurnInstructionPlan({
             ...commonArgs,
             permissionedBurnAuthority: providedAuthority,
@@ -178,7 +195,8 @@ export async function createConfidentialBurnInstructionPlan(input: {
  * {@link createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan} before
  * the next confidential mint.
  */
-export function createApplyConfidentialPendingBurnInstructionPlan(input: {
+export async function createApplyConfidentialPendingBurnInstructionPlan(input: {
+    rpc: Rpc<SolanaRpcApi>;
     /** The token mint (must carry `ConfidentialMintBurn`). */
     mint: Address;
     /** The mint authority. A bare address becomes a no-op signer. */
@@ -204,7 +222,13 @@ export function createApplyConfidentialPendingBurnInstructionPlan(input: {
          */
         rawSupply: bigint;
     };
-}): InstructionPlan {
+}): Promise<InstructionPlan> {
+    // Validates the mint carries `ConfidentialMintBurn` and — when resyncing —
+    // that the supply keys are the mint's registered ones, so a resync cannot
+    // silently re-encrypt under the wrong key and break every later confidential
+    // mint. Same guard the standalone supply builder applies.
+    await assertConfidentialSupplyKeysForMint(input.rpc, input.mint, input.resyncSupply?.supplyKeys);
+
     const applyPlan = singleInstructionPlan(
         getApplyConfidentialPendingBurnInstruction({
             mint: input.mint,
@@ -223,7 +247,7 @@ export function createApplyConfidentialPendingBurnInstructionPlan(input: {
     // later confidential mint fails on-chain with an opaque proof error.
     return nonDivisibleSequentialInstructionPlan([
         applyPlan,
-        createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan({
+        buildUpdateDecryptableSupplyPlan({
             mint: input.mint,
             authority: input.authority,
             supplyKeys: input.resyncSupply.supplyKeys,

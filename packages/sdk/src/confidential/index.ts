@@ -42,7 +42,10 @@ export { createEmptyConfidentialAccountInstructionPlan } from './empty-account.j
 
 export { createConfidentialMintInstructionPlan } from './mint.js';
 
-export { type ConfidentialMintBurnOptions } from '../issuance/create-mint.js';
+// Type-only export form: `export { type X } from '...'` is NOT fully erased —
+// it emits `export {} from '../issuance/create-mint.js'`, a runtime side-effect
+// import that pulls the whole issuance module into this subpath entrypoint.
+export type { ConfidentialMintBurnOptions } from '../issuance/create-mint.js';
 
 export { createConfidentialBurnInstructionPlan, createApplyConfidentialPendingBurnInstructionPlan } from './burn.js';
 

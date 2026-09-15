@@ -619,7 +619,8 @@ describeSkipIf(!RUN)('confidential transfer (devnet e2e)', () => {
             await step(
                 'apply-pending-burn-with-resync',
                 payer,
-                createApplyConfidentialPendingBurnInstructionPlan({
+                await createApplyConfidentialPendingBurnInstructionPlan({
+                    rpc,
                     mint: mint.address,
                     authority: payer,
                     resyncSupply: { supplyKeys, rawSupply: supplyAfterBurn },

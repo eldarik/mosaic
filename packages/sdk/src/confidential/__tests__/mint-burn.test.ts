@@ -380,6 +380,69 @@ describe('confidential burn (wrapper)', () => {
             expect(mockGetPermissionedConfidentialBurnInstructionPlan).not.toHaveBeenCalled();
         });
 
+        it('reuses one signer for both slots on a self-burn (owner is the burn authority)', async () => {
+            // Owner == configured burn authority, supplied in the two different
+            // accepted forms. Kit refuses to sign a transaction pairing a real
+            // signer with a noop signer for one address, so the builder must
+            // collapse them onto the real signer.
+            const ownerSigner = createMockSigner(BURN_AUTHORITY);
+            mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT, PERMISSIONED_BURN_EXT];
+
+            await createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: ownerSigner,
+                amount: '1',
+                keys: fakeKeys,
+                permissionedBurnAuthority: BURN_AUTHORITY,
+            });
+
+            const arg = mockGetPermissionedConfidentialBurnInstructionPlan.mock.calls[0][0] as any;
+            expect(arg.authority).toBe(ownerSigner);
+            expect(arg.permissionedBurnAuthority).toBe(ownerSigner);
+        });
+
+        it('keeps the real signer when only the burn authority is supplied as one', async () => {
+            const burnAuthoritySigner = createMockSigner(BURN_AUTHORITY);
+            mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT, PERMISSIONED_BURN_EXT];
+
+            await createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: BURN_AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+                permissionedBurnAuthority: burnAuthoritySigner,
+            });
+
+            const arg = mockGetPermissionedConfidentialBurnInstructionPlan.mock.calls[0][0] as any;
+            expect(arg.authority).toBe(burnAuthoritySigner);
+            expect(arg.permissionedBurnAuthority).toBe(burnAuthoritySigner);
+        });
+
+        it('keeps two distinct signers when the owner is not the burn authority', async () => {
+            mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT, PERMISSIONED_BURN_EXT];
+
+            await createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+                permissionedBurnAuthority: BURN_AUTHORITY,
+            });
+
+            const arg = mockGetPermissionedConfidentialBurnInstructionPlan.mock.calls[0][0] as any;
+            expect(arg.authority.address).toBe(AUTHORITY);
+            expect(arg.permissionedBurnAuthority.address).toBe(BURN_AUTHORITY);
+        });
+
         it('ignores a supplied burn authority on a mint without the extension', async () => {
             mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT];
 
@@ -401,8 +464,13 @@ describe('confidential burn (wrapper)', () => {
 });
 
 describe('apply confidential pending burn', () => {
+    let rpc: ReturnType<typeof createMockRpc>;
+
     beforeEach(() => {
         jest.clearAllMocks();
+        mockMintDecimals = 6;
+        mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT];
+        rpc = createMockRpc();
     });
 
     const expectApplyInstruction = (instruction: any) => {
@@ -416,16 +484,21 @@ describe('apply confidential pending burn', () => {
         expect(accounts).toContain(AUTHORITY);
     };
 
-    it('returns a single-instruction plan targeting the mint + authority', () => {
-        const plan: any = createApplyConfidentialPendingBurnInstructionPlan({ mint: MINT, authority: AUTHORITY });
+    it('returns a single-instruction plan targeting the mint + authority', async () => {
+        const plan: any = await createApplyConfidentialPendingBurnInstructionPlan({
+            rpc: rpc as never,
+            mint: MINT,
+            authority: AUTHORITY,
+        });
         expect(plan.kind).toBe('single');
         expectApplyInstruction(plan.instruction);
         // Without `resyncSupply` the decryptable supply is left to the caller.
         expect(mockGetUpdateDecryptableSupplyInstruction).not.toHaveBeenCalled();
     });
 
-    it('sequences the decryptable-supply re-sync after the apply when resyncSupply is given', () => {
-        const plan: any = createApplyConfidentialPendingBurnInstructionPlan({
+    it('sequences the decryptable-supply re-sync after the apply when resyncSupply is given', async () => {
+        const plan: any = await createApplyConfidentialPendingBurnInstructionPlan({
+            rpc: rpc as never,
             mint: MINT,
             authority: AUTHORITY,
             resyncSupply: { supplyKeys: fakeSupplyKeys, rawSupply: 250n },
@@ -439,8 +512,9 @@ describe('apply confidential pending burn', () => {
         expect(plan.plans[1].instruction).toBe(updateDecryptableSupplyIx);
     });
 
-    it('forwards the mint, authority, supply AES key and raw supply to the re-sync helper', () => {
-        createApplyConfidentialPendingBurnInstructionPlan({
+    it('forwards the mint, authority, supply AES key and raw supply to the re-sync helper', async () => {
+        await createApplyConfidentialPendingBurnInstructionPlan({
+            rpc: rpc as never,
             mint: MINT,
             authority: AUTHORITY,
             resyncSupply: { supplyKeys: fakeSupplyKeys, rawSupply: 250n },
@@ -454,13 +528,40 @@ describe('apply confidential pending burn', () => {
         expect(args.supply).toBe(250n);
     });
 
-    it('rejects an out-of-range resync supply before building anything', () => {
-        expect(() =>
+    it('rejects an out-of-range resync supply before building anything', async () => {
+        await expect(
             createApplyConfidentialPendingBurnInstructionPlan({
+                rpc: rpc as never,
                 mint: MINT,
                 authority: AUTHORITY,
                 resyncSupply: { supplyKeys: fakeSupplyKeys, rawSupply: 2n ** 64n },
             }),
-        ).toThrow('rawSupply must be a u64');
+        ).rejects.toThrow('rawSupply must be a u64');
+    });
+
+    it("rejects resync supply keys that are not the mint's registered supply keys", async () => {
+        // A holder's account keys passed where the supply authority's are expected:
+        // the program would happily re-encrypt under them, breaking every later
+        // confidential mint with an opaque on-chain proof rejection.
+        await expect(
+            createApplyConfidentialPendingBurnInstructionPlan({
+                rpc: rpc as never,
+                mint: MINT,
+                authority: AUTHORITY,
+                resyncSupply: { supplyKeys: fakeKeys, rawSupply: 250n },
+            }),
+        ).rejects.toThrow('does not match mint');
+        expect(mockGetUpdateDecryptableSupplyInstruction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a mint without the ConfidentialMintBurn extension', async () => {
+        mockMintExtensions = [TRANSFER_MINT_EXT];
+        await expect(
+            createApplyConfidentialPendingBurnInstructionPlan({
+                rpc: rpc as never,
+                mint: MINT,
+                authority: AUTHORITY,
+            }),
+        ).rejects.toThrow('not configured for confidential mint/burn');
     });
 });
