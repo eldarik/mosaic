@@ -39,4 +39,34 @@ npx mosaic create stablecoin --help
 node --input-type=module \
     -e "const m = await import('@solana/mosaic-sdk'); if (Object.keys(m).length === 0) throw new Error('SDK loaded but exported nothing'); console.log('SDK OK: ' + Object.keys(m).length + ' exports');"
 
+# The root barrel above covers token-2022's `@solana/zk-sdk/bundler` edge, but not
+# the SDK's own `./_zk` -> `@solana/zk-sdk/node` export condition, and not the
+# single-resolved-copy invariant the wasm classes rely on ("expected instance of
+# ElGamalKeypair" when two copies get loaded). Import the confidential subpath and
+# run one real derivation through the wasm, signing with plain node crypto so the
+# check needs no extra dependency and no network.
+node --input-type=module -e "
+import { generateKeyPairSync, sign as edSign } from 'node:crypto';
+const c = await import('@solana/mosaic-sdk/confidential');
+for (const name of ['deriveConfidentialKeys', 'getConfidentialMintBurnInit', 'freeConfidentialKeys']) {
+    if (typeof c[name] !== 'function') throw new Error('confidential subpath missing ' + name);
+}
+const { privateKey } = generateKeyPairSync('ed25519');
+// deriveConfidentialKeys only needs 'address' (to index the result) and
+// 'signMessages', so a minimal ed25519 signer stands in for a wallet.
+const signer = {
+    address: 'smoke',
+    signMessages: async messages => messages.map(m => ({ smoke: new Uint8Array(edSign(null, m.content, privateKey)) })),
+};
+const keys = await c.deriveConfidentialKeys({ signer });
+try {
+    const init = c.getConfidentialMintBurnInit(keys);
+    if (typeof init.supplyElgamalPubkey !== 'string') throw new Error('supplyElgamalPubkey is not an address');
+    if (init.decryptableSupply.length !== 36) throw new Error('decryptableSupply is not 36 bytes');
+    console.log('confidential subpath OK: wasm derivation + supply init');
+} finally {
+    c.freeConfidentialKeys(keys);
+}
+"
+
 echo "CLI package smoke test passed"

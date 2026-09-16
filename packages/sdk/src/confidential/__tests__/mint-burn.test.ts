@@ -42,10 +42,14 @@ jest.mock('@solana-program/token-2022/confidential', () => ({
 let mockMintDecimals = 6;
 let mockMintExtensions: unknown[] = [];
 let mockTokenExtensions: unknown[] = [];
+/** The mint the fetched token account belongs to — set per test in `beforeEach`. */
+let mockTokenMint: Address;
 const mockMintData = () => ({
     data: { decimals: mockMintDecimals, extensions: { __option: 'Some', value: mockMintExtensions } },
 });
-const mockTokenData = () => ({ data: { extensions: { __option: 'Some', value: mockTokenExtensions } } });
+const mockTokenData = () => ({
+    data: { mint: mockTokenMint, extensions: { __option: 'Some', value: mockTokenExtensions } },
+});
 
 jest.mock('@solana-program/token-2022', () => ({
     ...jest.requireActual('@solana-program/token-2022'),
@@ -62,6 +66,8 @@ import { createConfidentialMintInstructionPlan } from '../mint.js';
 import { createApplyConfidentialPendingBurnInstructionPlan, createConfidentialBurnInstructionPlan } from '../burn.js';
 
 const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' as Address;
+/** A second mint, to stand in for an account handed over from the wrong mint. */
+const OTHER_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB' as Address;
 const DEST_TOKEN = 'HA3KcFsXNjRJsRZq1P1Y8qPAeSZnZsFyauCDEsSSGqTj' as Address;
 const SOURCE_TOKEN = 'sAPDrViGV3C6PaT4xD7uRDDvB4xCURfZzDkGEd8Yv4v' as Address;
 const AUTHORITY = 'FA4EafWTpd3WEpB5hzsMjPwWnFBzjN25nKHsStgxBpiT' as Address;
@@ -117,6 +123,7 @@ describe('confidential mint (wrapper)', () => {
         mockMintDecimals = 6;
         mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT];
         mockTokenExtensions = [ACCOUNT_EXT];
+        mockTokenMint = MINT;
         rpc = createMockRpc();
     });
 
@@ -194,6 +201,25 @@ describe('confidential mint (wrapper)', () => {
         expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
     });
 
+    // The plan is multi-transaction: proof setup funds three context-state
+    // accounts before the mint instruction lands, so a mismatch caught only
+    // on-chain would strand their rent with no cleanup transaction.
+    it('fails fast when the destination account belongs to a different mint', async () => {
+        mockTokenMint = OTHER_MINT;
+        await expect(
+            createConfidentialMintInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                destinationToken: DEST_TOKEN,
+                authority: AUTHORITY,
+                amount: '2',
+                supplyKeys: fakeSupplyKeys,
+            }),
+        ).rejects.toThrow(/belongs to mint/);
+        expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
+    });
+
     it('fails fast when the destination account is not confidential-transfer configured', async () => {
         mockTokenExtensions = [];
         await expect(
@@ -239,6 +265,7 @@ describe('confidential burn (wrapper)', () => {
         mockMintDecimals = 6;
         mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT];
         mockTokenExtensions = [ACCOUNT_EXT];
+        mockTokenMint = MINT;
         rpc = createMockRpc();
     });
 
@@ -295,6 +322,22 @@ describe('confidential burn (wrapper)', () => {
                 keys: fakeKeys,
             }),
         ).rejects.toThrow(/ConfidentialTransferMint/);
+        expect(mockGetConfidentialBurnInstructionPlan).not.toHaveBeenCalled();
+    });
+
+    it('fails fast when the account belongs to a different mint', async () => {
+        mockTokenMint = OTHER_MINT;
+        await expect(
+            createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+            }),
+        ).rejects.toThrow(/belongs to mint/);
         expect(mockGetConfidentialBurnInstructionPlan).not.toHaveBeenCalled();
     });
 

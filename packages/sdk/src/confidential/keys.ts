@@ -87,18 +87,18 @@ export interface DeriveConfidentialKeysInput {
 }
 
 /**
- * Derives an ElGamal keypair + AES key from a public seed with a **single**
- * signature over `ConfidentialKeys.signerMessage(seed)`. Shared by every
- * derivation in this module so they all cost one signature (one wallet prompt),
- * fail the same way, and all free the intermediate pair.
+ * Derives an ElGamal keypair + AES key with a **single** signature over the
+ * canonical `ConfidentialKeys.signerMessage` message. Derivation is wallet-only
+ * — there is no seed — so every derivation in this module costs one signature
+ * (one wallet prompt), fails the same way, and frees the intermediate pair.
  *
  * A signer that refuses the message gets a diagnosis rather than the wallet's
  * raw text: the failure is intrinsic to the derivation scheme (the message bytes
  * are the key material and cannot be reshaped to suit a wallet), so the useful
  * information is *why* it cannot be fixed and what to do instead.
  */
-async function deriveKeysFromSeed(signer: MessagePartialSigner, seed: Uint8Array): Promise<ConfidentialKeys> {
-    const message = ZkConfidentialKeys.signerMessage(seed);
+async function deriveKeysFromWalletSignature(signer: MessagePartialSigner): Promise<ConfidentialKeys> {
+    const message = ZkConfidentialKeys.signerMessage(new Uint8Array(0));
 
     let signatures: Awaited<ReturnType<MessagePartialSigner['signMessages']>>[number];
     try {
@@ -107,8 +107,8 @@ async function deriveKeysFromSeed(signer: MessagePartialSigner, seed: Uint8Array
         if (isSignerRejection(error)) throw error;
         throw new Error(
             `The signer refused to sign the confidential-balance key-derivation message ` +
-                `(${describeError(error)}). That message is \`solana-conf-bal/v1\` plus this derivation's seed ` +
-                `— a domain-separated derivation seed, not a transaction — but some browser wallets classify ` +
+                `(${describeError(error)}). That message is \`solana-conf-bal/v1\` ` +
+                `— a domain-separated derivation constant, not a transaction — but some browser wallets classify ` +
                 `binary sign-message payloads as transactions and block them. Its bytes determine the account ` +
                 `keys, so they cannot be changed to satisfy a wallet without making balances undecryptable by ` +
                 `every other tool. Use a wallet that signs arbitrary messages, or key the account through ` +
@@ -152,7 +152,7 @@ async function deriveKeysFromSeed(signer: MessagePartialSigner, seed: Uint8Array
  * ⚠️ The returned keys own WASM memory — free them with {@link freeConfidentialKeys}.
  */
 export async function deriveConfidentialKeys(input: DeriveConfidentialKeysInput): Promise<ConfidentialKeys> {
-    return deriveKeysFromSeed(input.signer, new Uint8Array(0));
+    return deriveKeysFromWalletSignature(input.signer);
 }
 
 /** The two init values a `ConfidentialMintBurn` mint needs for its initial (zero) supply. */
@@ -190,8 +190,12 @@ export interface ConfidentialMintBurnInit {
  */
 export function getConfidentialMintBurnInit(keys: ConfidentialKeys): ConfidentialMintBurnInit {
     const pubkey = keys.elgamal.pubkey();
-    const decryptable = keys.aes.encrypt(0n);
+    // Allocated inside the `try` so a throwing `encrypt` (e.g. `keys` already
+    // freed, which surfaces as a wasm-bindgen null-pointer panic) still frees
+    // `pubkey` instead of leaking it.
+    let decryptable: AeCiphertext | undefined;
     try {
+        decryptable = keys.aes.encrypt(0n);
         return {
             supplyElgamalPubkey: getAddressDecoder().decode(pubkey.toBytes()),
             // Copy out of WASM memory: `toBytes()` may return a view, and
@@ -200,7 +204,7 @@ export function getConfidentialMintBurnInit(keys: ConfidentialKeys): Confidentia
         };
     } finally {
         pubkey.free?.();
-        decryptable.free?.();
+        decryptable?.free?.();
     }
 }
 

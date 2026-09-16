@@ -92,6 +92,15 @@ export async function createConfidentialBurnInstructionPlan(input: {
                 `both are required for confidential burn.`,
         );
     }
+    // The plan is a multi-transaction sequence: its proof-setup transactions run
+    // (and fund three rent-paying context-state accounts) before the burn itself
+    // reaches the chain. A mint mismatch caught only on-chain would therefore fail
+    // the burn *and* skip the cleanup transaction, stranding that rent.
+    if (tokenDecoded.data.mint !== input.mint) {
+        throw new Error(
+            `Token account ${input.tokenAccount} belongs to mint ${tokenDecoded.data.mint}, ` + `not ${input.mint}.`,
+        );
+    }
     if (!isConfidentialTransferAccount(tokenDecoded)) {
         throw new Error(
             `Token account ${input.tokenAccount} is not configured for confidential transfers ` +
