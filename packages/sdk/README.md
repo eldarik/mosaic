@@ -254,15 +254,16 @@ freeConfidentialKeys(supplyKeys); // once you no longer need them for mint/burn
 > value, so Token-2022 rejects **every** plaintext↔confidential conversion on it with
 > `IllegalMintBurnConversion`:
 >
-> | Operation                                              | On a `ConfidentialMintBurn` mint       |
-> | ------------------------------------------------------ | -------------------------------------- |
-> | `createMintToTransaction` (plaintext mint)             | ✗ rejected — use the confidential mint |
-> | `createBurnTransaction` / `createForceBurnTransaction` | ✗ rejected — use the confidential burn |
-> | `createConfidentialDepositInstructionPlan`             | ✗ rejected — nothing to deposit from   |
-> | `createConfidentialWithdrawInstructionPlan`            | ✗ rejected — nowhere to withdraw to    |
-> | `createConfidentialTransferInstructionPlan`            | ✓ supported                            |
+> | Operation                                                     | On a `ConfidentialMintBurn` mint        |
+> | ------------------------------------------------------------- | --------------------------------------- |
+> | `createMintToTransaction` (plaintext mint)                    | ✗ rejected — use the confidential mint  |
+> | `createBurnTransaction` / `createPermissionedBurnTransaction` | ✗ rejected — use the confidential burn  |
+> | `createForceBurnTransaction` (permanent delegate)             | ✗ rejected — no confidential equivalent |
+> | `createConfidentialDepositInstructionPlan`                    | ✗ rejected — nothing to deposit from    |
+> | `createConfidentialWithdrawInstructionPlan`                   | ✗ rejected — nowhere to withdraw to     |
+> | `createConfidentialTransferInstructionPlan`                   | ✓ supported                             |
 >
-> All five rejected builders fail fast client-side rather than emitting a doomed
+> All six rejected builders fail fast client-side rather than emitting a doomed
 > transaction. Issuance and redemption go exclusively through
 > `createConfidentialMintInstructionPlan` / `createConfidentialBurnInstructionPlan`
 > (step 5), and **holders have no route back to a plaintext balance** — plan for that
@@ -442,7 +443,8 @@ const burn = await createConfidentialBurnInstructionPlan({
 
 // Apply the mint's accumulated pending burn into its confidential supply (mint authority),
 // re-syncing the decryptable supply in the same plan — see the warning below.
-const applyBurn = createApplyConfidentialPendingBurnInstructionPlan({
+const applyBurn = await createApplyConfidentialPendingBurnInstructionPlan({
+    rpc,
     mint: 'MintPubkey...',
     authority: mintAuthority,
     resyncSupply: {

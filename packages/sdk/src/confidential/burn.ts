@@ -181,13 +181,13 @@ export async function createConfidentialBurnInstructionPlan(input: {
  * recommended form, since it makes the re-sync impossible to forget:
  *
  * ```ts
- * await step(
- *     createApplyConfidentialPendingBurnInstructionPlan({
- *         mint,
- *         authority: mintAuthority,
- *         resyncSupply: { supplyKeys, rawSupply: supplyAfterBurn },
- *     }),
- * );
+ * const applyBurn = await createApplyConfidentialPendingBurnInstructionPlan({
+ *     rpc,
+ *     mint,
+ *     authority: mintAuthority,
+ *     resyncSupply: { supplyKeys, rawSupply: supplyAfterBurn },
+ * });
+ * await step(applyBurn);
  * ```
  *
  * Omitting it returns the bare `ApplyPendingBurn` as a `singleInstructionPlan`,

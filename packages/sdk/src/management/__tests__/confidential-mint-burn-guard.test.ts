@@ -94,6 +94,26 @@ describe('confidential mint/burn guard on plaintext mint & burn', () => {
         );
     });
 
+    test('createForceBurnTransaction does not point the permanent delegate at the confidential burn builder', async () => {
+        // A confidential burn needs the token account owner's ElGamal/AES keys, which
+        // a permanent delegate doesn't hold — so the message must say the operation is
+        // unsupported rather than advertising a builder the delegate can't call.
+        mockMintExtensions = [TRANSFER_MINT_EXT, MINT_BURN_EXT];
+        seedMintDetails(rpc, {
+            address: mint,
+            decimals: 6,
+            mintAuthority: wallet,
+            extensions: [CONFIDENTIAL_MINT_BURN_JSON_EXT],
+        });
+        const { createForceBurnTransaction } = await import('../force-burn.js');
+        const error = await createForceBurnTransaction(rpc, mint, wallet, 1, authority, feePayer).then(
+            () => null,
+            (e: Error) => e,
+        );
+        expect(error?.message).toMatch(/permanent-delegate force burn has no confidential equivalent/);
+        expect(error?.message).not.toMatch(/Use the confidential path/);
+    });
+
     test('createPermissionedBurnTransaction rejects when the mint has ConfidentialMintBurn', async () => {
         mockMintExtensions = [TRANSFER_MINT_EXT, MINT_BURN_EXT];
         seedMintDetails(rpc, {

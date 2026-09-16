@@ -60,10 +60,21 @@ export const createForceBurnTransaction = async (
 
     // A ConfidentialMintBurn mint keeps its supply encrypted, so Token-2022 rejects
     // plaintext Burn — including a permanent-delegate force burn (IllegalMintBurnConversion).
-    // Fail fast with an actionable message rather than building a transaction the chain
-    // would reject.
+    // Unlike the other rejected builders this one has no confidential replacement to
+    // point at: `createConfidentialBurnInstructionPlan` is authored by the token
+    // account's owner and needs that owner's ConfidentialKeys, which a permanent
+    // delegate by definition doesn't hold. Say so, rather than naming a builder the
+    // caller can't use.
     if (await mintHasConfidentialMintBurnExtension(rpc, mint, extensions)) {
-        throw confidentialMintBurnConversionError(mint, 'plaintext burning', 'createConfidentialBurnInstructionPlan');
+        throw confidentialMintBurnConversionError(
+            mint,
+            'plaintext burning',
+            null,
+            `A permanent-delegate force burn has no confidential equivalent: a confidential burn is authored ` +
+                `by the token account's owner and requires that owner's ElGamal and AES keys, which a delegate ` +
+                `does not hold. On a ConfidentialMintBurn mint only the account owner can redeem supply, via ` +
+                `createConfidentialBurnInstructionPlan from @solana/mosaic-sdk/confidential.`,
+        );
     }
 
     const enableSrfc37 = usesTokenAcl && isDefaultAccountStateSetFrozen(extensions);

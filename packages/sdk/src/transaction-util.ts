@@ -337,19 +337,25 @@ export async function mintHasConfidentialMintBurnExtension(
  * @param operation - What the caller tried to do (e.g. `'plaintext minting'`)
  * @param alternative - The confidential builder to use instead, or null when the
  *   operation has no confidential equivalent
+ * @param guidance - Replaces the default trailing advice. For the callers where
+ *   neither a named builder nor the generic "mint and burn confidentially instead"
+ *   line is true — a permanent-delegate force burn, whose confidential counterpart
+ *   cannot exist because confidential burns need the account owner's keys.
  */
 export function confidentialMintBurnConversionError(
     mint: Address,
     operation: string,
     alternative: string | null,
+    guidance?: string,
 ): Error {
     return new Error(
         `Mint ${mint} has the ConfidentialMintBurn extension enabled; ${operation} is not supported. ` +
-            (alternative
-                ? `Use the confidential path (${alternative}) from @solana/mosaic-sdk/confidential instead.`
-                : `A ConfidentialMintBurn mint has no plaintext balance side: issue and redeem supply with ` +
-                  `createConfidentialMintInstructionPlan / createConfidentialBurnInstructionPlan from ` +
-                  `@solana/mosaic-sdk/confidential.`),
+            (guidance ??
+                (alternative
+                    ? `Use the confidential path (${alternative}) from @solana/mosaic-sdk/confidential instead.`
+                    : `A ConfidentialMintBurn mint has no plaintext balance side: issue and redeem supply with ` +
+                      `createConfidentialMintInstructionPlan / createConfidentialBurnInstructionPlan from ` +
+                      `@solana/mosaic-sdk/confidential.`)),
     );
 }
 
