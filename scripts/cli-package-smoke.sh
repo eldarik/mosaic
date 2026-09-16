@@ -32,12 +32,11 @@ npx mosaic --help
 npx mosaic inspect-mint --help
 npx mosaic create stablecoin --help
 
-# The published SDK must be importable in plain Node too. This runs under the
-# CLI's zk-sdk resolve hook: upstream token-2022's wasm entry is unloadable in
-# Node without it (see packages/cli/bin/), and the hook does not mask SDK
-# specifier bugs — the SDK's own relative imports resolve before the zk edge.
-node --import ./node_modules/@solana/mosaic-cli/bin/register-zk-node.mjs \
-    --input-type=module \
+# The published SDK must be importable in plain Node too, with no resolve hook:
+# upstream token-2022 statically imports `@solana/zk-sdk/bundler`, whose wasm
+# entry used to be unloadable in Node — zk-sdk 0.5.2 added the `node` condition
+# on that subpath, so plain `node` now resolves it on its own.
+node --input-type=module \
     -e "const m = await import('@solana/mosaic-sdk'); if (Object.keys(m).length === 0) throw new Error('SDK loaded but exported nothing'); console.log('SDK OK: ' + Object.keys(m).length + ' exports');"
 
 echo "CLI package smoke test passed"

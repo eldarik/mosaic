@@ -22,7 +22,7 @@
     "scripts": {
         "build": "tsc -b",
         "dev": "tsc --watch",
-        "dev:run": "tsx --import ./bin/register-zk-node.mjs src/index.ts",
+        "dev:run": "tsx src/index.ts",
         "start": "node bin/mosaic.mjs",
         "test": "echo 'Tests will be implemented'",
         "lint": "eslint src --ext .ts",
