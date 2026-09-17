@@ -5,9 +5,11 @@
 
 Move to `@solana-program/token-2022@0.18.0` on Solana Kit v8, and adopt the remaining upstream confidential helpers
 
-**Breaking:** the SDK and CLI now require `@solana/kit@^8` (from `^7`), along with `@solana/sysvars@^8`, `@solana-program/zk-elgamal-proof@^0.4.0`, `@solana-program/system@0.14.1` and `@solana-program/memo@^0.14.0`. Consumers must upgrade Kit alongside this release.
+**Breaking:** the SDK and CLI now require `@solana/kit@^8` (from `^7`), along with `@solana/sysvars@^8`, `@solana-program/zk-elgamal-proof@^0.4.0`, `@solana-program/system@0.14.1` and `@solana-program/memo@0.13.1`. Consumers must upgrade Kit alongside this release.
 
 Worth knowing if you are tracking token-2022 yourself: `confidentialTransferHelpers` is byte-identical between 0.15.0 and 0.18.0, so 0.16–0.18 added no confidential mint/burn API. This bump is about staying on the supported Kit line — the whole `@solana-program/*` ecosystem has moved to Kit v8 — not about new upstream features.
+
+**`@solana-program/memo` is held at 0.13.1 on purpose**, even though 0.14.x is Kit-v8-native. 0.14.0 repointed `MEMO_PROGRAM_ADDRESS` from the Memo v3 program (`MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`) to the new Pinocchio Memo v4 program (`Memo4c2pN8afCj432Lb7RMVKi9PbQnnW7ewFFaV3oAH`), which would have silently changed the on-chain program that `createTransferTransaction`'s optional memo targets. Memo v3 stays the default: it is what wallets, explorers and indexers parse today, and unlike v4 it is present in `solana-test-validator`'s genesis. Adopting Memo v4 will be its own, explicit change.
 
 **New: opt-in record-backed range proofs.** `createConfidentialMintInstructionPlan`, `createConfidentialBurnInstructionPlan`, `createConfidentialTransferInstructionPlan` and `createConfidentialWithdrawInstructionPlan` accept a `recordBackedProof` option that stages the batched range proof in an SPL Record account instead of passing it inline in the verify instruction's data.
 
