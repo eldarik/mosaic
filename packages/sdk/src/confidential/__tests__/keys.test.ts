@@ -1,6 +1,7 @@
 import type { Address } from '@solana/kit';
 import { createKeyPairSignerFromPrivateKeyBytes, generateKeyPairSigner, getAddressDecoder } from '@solana/kit';
 import { ElGamalKeypair, AeKey } from '@solana/zk-sdk/node';
+import { deriveConfidentialKeys as upstreamDeriveConfidentialKeys } from '@solana-program/token-2022/confidential';
 import {
     assertConfidentialKeysMatchAccount,
     assertConfidentialKeysMatchSupply,
@@ -91,6 +92,44 @@ describe('deriveConfidentialKeys', () => {
             ]),
         );
         freeConfidentialKeys(keys);
+    });
+
+    // Upstream token-2022 ships its own `deriveConfidentialKeys` implementing the
+    // same `solana-conf-bal/v1` wallet-only scheme. This SDK deliberately does NOT
+    // delegate to it: upstream returns plain bytes, while every upstream
+    // InstructionPlan helper requires live WASM `ElGamalKeypair`/`AeKey` objects,
+    // and the local version additionally carries free() hygiene and richer signer
+    // error diagnosis. This test buys the one thing delegating would have bought —
+    // a guarantee the two derivations cannot silently diverge.
+    it('derives byte-identical keys to the upstream token-2022 implementation', async () => {
+        const signer = await generateKeyPairSigner();
+
+        const ours = await deriveConfidentialKeys({ signer });
+        const theirs = await upstreamDeriveConfidentialKeys({ signer });
+
+        try {
+            const ourSecret = ours.elgamal.secret();
+            try {
+                expect(new Uint8Array(ourSecret.toBytes())).toEqual(new Uint8Array(theirs.elgamalKeypair.secretKey));
+            } finally {
+                ourSecret.free?.();
+            }
+
+            const ourPubkey = ours.elgamal.pubkey();
+            try {
+                // Upstream exposes the ElGamal pubkey as a base58 Address; ours is raw
+                // bytes, so compare through the same decoder the SDK uses internally.
+                expect(getAddressDecoder().decode(new Uint8Array(ourPubkey.toBytes()))).toBe(
+                    theirs.elgamalKeypair.elgamalPubkey,
+                );
+            } finally {
+                ourPubkey.free?.();
+            }
+
+            expect(new Uint8Array(ours.aes.toBytes())).toEqual(new Uint8Array(theirs.aeKey));
+        } finally {
+            freeConfidentialKeys(ours);
+        }
     });
 
     // One signature, not two — the regression this guards against is a

@@ -11,7 +11,9 @@ import {
 import { fetchMint, fetchToken, getApplyConfidentialPendingBurnInstruction } from '@solana-program/token-2022';
 import {
     getConfidentialBurnInstructionPlan,
+    getConfidentialBurnWithRecordInstructionPlan,
     getPermissionedConfidentialBurnInstructionPlan,
+    getPermissionedConfidentialBurnWithRecordInstructionPlan,
 } from '@solana-program/token-2022/confidential';
 import { getPermissionedBurnAuthorityFromMint } from '../transaction-util.js';
 import {
@@ -22,7 +24,13 @@ import {
 } from './extensions.js';
 import { assertConfidentialKeysMatchAccount, type ConfidentialKeys } from './keys.js';
 import { assertConfidentialSupplyKeysForMint, buildUpdateDecryptableSupplyPlan } from './supply.js';
-import { type TokenAmount, tokenAmountToRaw, toAuthoritySigner } from './util.js';
+import {
+    type RecordBackedProof,
+    type TokenAmount,
+    toRecordProofArgs,
+    tokenAmountToRaw,
+    toAuthoritySigner,
+} from './util.js';
 
 /**
  * Confidentially **burns** tokens from an account's available confidential
@@ -70,6 +78,13 @@ export async function createConfidentialBurnInstructionPlan(input: {
      * otherwise. A bare address becomes a no-op signer.
      */
     permissionedBurnAuthority?: Address | TransactionSigner;
+    /**
+     * Stage the batched range proof in an SPL Record account instead of inline in
+     * the verify instruction data. Pass this (`{}` is enough) when sending with an
+     * executor that sets compute-unit limits — see {@link RecordBackedProof}.
+     * Applies to both the standard and the permissioned burn variant.
+     */
+    recordBackedProof?: RecordBackedProof;
 }): Promise<InstructionPlan> {
     const [mintDecoded, tokenDecoded] = await Promise.all([
         fetchMint(input.rpc, input.mint),
@@ -131,6 +146,11 @@ export async function createConfidentialBurnInstructionPlan(input: {
         auditorElgamalPubkey: input.auditorElgamalPubkey,
     };
 
+    // Resolved once so the standard, permissioned and self-burn branches below all
+    // opt into the record-backed range proof identically.
+    const recordProofArgs =
+        input.recordBackedProof === undefined ? undefined : toRecordProofArgs(input.recordBackedProof);
+
     // On a PermissionedBurn mint the token-2022 program rejects the standard
     // burn variant (TokenError::InvalidInstruction) and requires the
     // permissioned variant, with the mint's burn authority as an extra signer.
@@ -159,19 +179,33 @@ export async function createConfidentialBurnInstructionPlan(input: {
         // the caller supplied as a real signer.
         if (providedAuthority.address === authoritySigner.address) {
             const sharedAuthority = typeof input.authority === 'string' ? providedAuthority : authoritySigner;
-            return getPermissionedConfidentialBurnInstructionPlan({
+            const sharedArgs = {
                 ...commonArgs,
                 authority: sharedAuthority,
                 permissionedBurnAuthority: sharedAuthority,
-            });
+            };
+            if (recordProofArgs !== undefined) {
+                return getPermissionedConfidentialBurnWithRecordInstructionPlan({ ...sharedArgs, ...recordProofArgs });
+            }
+            return getPermissionedConfidentialBurnInstructionPlan(sharedArgs);
         }
 
-        return getPermissionedConfidentialBurnInstructionPlan({
+        const permissionedArgs = {
             ...commonArgs,
             permissionedBurnAuthority: providedAuthority,
-        });
+        };
+        if (recordProofArgs !== undefined) {
+            return getPermissionedConfidentialBurnWithRecordInstructionPlan({
+                ...permissionedArgs,
+                ...recordProofArgs,
+            });
+        }
+        return getPermissionedConfidentialBurnInstructionPlan(permissionedArgs);
     }
 
+    if (recordProofArgs !== undefined) {
+        return getConfidentialBurnWithRecordInstructionPlan({ ...commonArgs, ...recordProofArgs });
+    }
     return getConfidentialBurnInstructionPlan(commonArgs);
 }
 

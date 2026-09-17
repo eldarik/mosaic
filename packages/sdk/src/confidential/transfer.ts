@@ -7,7 +7,10 @@ import {
     type TransactionSigner,
 } from '@solana/kit';
 import { fetchMint, fetchToken } from '@solana-program/token-2022';
-import { getConfidentialTransferInstructionPlan } from '@solana-program/token-2022/confidential';
+import {
+    getConfidentialTransferInstructionPlan,
+    getConfidentialTransferWithRecordInstructionPlan,
+} from '@solana-program/token-2022/confidential';
 import {
     getConfidentialTransferAccountElgamalPubkey,
     isConfidentialTransferAccount,
@@ -15,7 +18,13 @@ import {
     mintHasConfidentialTransferFee,
 } from './extensions.js';
 import { assertConfidentialKeysMatchAccount, type ConfidentialKeys } from './keys.js';
-import { type TokenAmount, tokenAmountToRaw, toAuthoritySigner } from './util.js';
+import {
+    type RecordBackedProof,
+    type TokenAmount,
+    toRecordProofArgs,
+    tokenAmountToRaw,
+    toAuthoritySigner,
+} from './util.js';
 
 /**
  * Confidentially transfers tokens from one account to another. Wraps the
@@ -52,6 +61,12 @@ export async function createConfidentialTransferInstructionPlan(input: {
     keys: ConfidentialKeys;
     /** Override the auditor pubkey; defaults to the mint's configured auditor. */
     auditorElgamalPubkey?: Address;
+    /**
+     * Stage the batched range proof in an SPL Record account instead of inline in
+     * the verify instruction data. Pass this (`{}` is enough) when sending with an
+     * executor that sets compute-unit limits — see {@link RecordBackedProof}.
+     */
+    recordBackedProof?: RecordBackedProof;
 }): Promise<InstructionPlan> {
     const [mintDecoded, sourceDecoded, destinationDecoded] = await Promise.all([
         fetchMint(input.rpc, input.mint),
@@ -100,7 +115,7 @@ export async function createConfidentialTransferInstructionPlan(input: {
     // the configured auditor without a redundant fetch (mirrors mint.ts/burn.ts).
     const rawAmount = tokenAmountToRaw(input.amount, mintDecoded.data.decimals);
 
-    return getConfidentialTransferInstructionPlan({
+    const args = {
         rpc: input.rpc,
         payer: input.payer,
         mint: input.mint,
@@ -114,5 +129,13 @@ export async function createConfidentialTransferInstructionPlan(input: {
         sourceElgamalKeypair: input.keys.elgamal,
         aesKey: input.keys.aes,
         auditorElgamalPubkey: input.auditorElgamalPubkey,
-    });
+    };
+
+    if (input.recordBackedProof !== undefined) {
+        return getConfidentialTransferWithRecordInstructionPlan({
+            ...args,
+            ...toRecordProofArgs(input.recordBackedProof),
+        });
+    }
+    return getConfidentialTransferInstructionPlan(args);
 }

@@ -11,6 +11,11 @@ const mockConfigurePlan = { kind: 'configurePlan' } as const;
 const mockWithdrawPlan = { kind: 'withdrawPlan' } as const;
 const mockTransferPlan = { kind: 'transferPlan' } as const;
 const mockApplyIx = { tag: 'applyIx' } as const;
+const mockEmptyPlan = { kind: 'emptyPlan' } as const;
+// Record-backed variants stage the batched range proof in an SPL Record account
+// rather than inline; distinct identities so dispatch can be asserted.
+const mockWithdrawWithRecordPlan = { kind: 'withdrawWithRecordPlan' } as const;
+const mockTransferWithRecordPlan = { kind: 'transferWithRecordPlan' } as const;
 // Matches `fakeKeys.elgamal.pubkey()` below, so builders' new
 // `assertConfidentialKeysMatchAccount` check passes for the source account.
 const SOURCE_ELGAMAL_PUBKEY = 'DsT1111111111111111111111111111111111111111' as Address;
@@ -47,30 +52,20 @@ jest.mock('@solana-program/token-2022/confidential', () => ({
     getConfidentialWithdrawInstructionPlan: jest.fn(async () => mockWithdrawPlan),
     getConfidentialTransferInstructionPlan: jest.fn(async () => mockTransferPlan),
     getApplyConfidentialPendingBalanceInstructionFromToken: jest.fn(() => mockApplyIx),
+    getEmptyConfidentialTransferAccountInstructionPlan: jest.fn(async () => mockEmptyPlan),
+    getConfidentialWithdrawWithRecordInstructionPlan: jest.fn(async () => mockWithdrawWithRecordPlan),
+    getConfidentialTransferWithRecordInstructionPlan: jest.fn(async () => mockTransferWithRecordPlan),
 }));
 
-// Mock the bespoke proof + account-state plumbing used by empty-account.
-jest.mock('../proof.js', () => ({
-    buildZeroCiphertextProofIxs: jest.fn(async () => ({ setup: [{ tag: 'verifyZero' }], cleanup: [] })),
-}));
-jest.mock('../account-state.js', () => ({
-    fetchConfidentialAccountState: jest.fn(async () => ({
-        // Matches `fakeKeys.elgamal.pubkey()` so `assertConfidentialKeysMatchAccount` passes.
-        elgamalPubkey: SOURCE_ELGAMAL_PUBKEY,
-        ciphertexts: { availableBalance: new Uint8Array(64) },
-    })),
-}));
-
-import {
-    getConfidentialDepositInstructionDataDecoder,
-    getEmptyConfidentialTransferAccountInstructionDataDecoder,
-    TOKEN_2022_PROGRAM_ADDRESS,
-} from '@solana-program/token-2022';
+import { getConfidentialDepositInstructionDataDecoder, TOKEN_2022_PROGRAM_ADDRESS } from '@solana-program/token-2022';
 import {
     getApplyConfidentialPendingBalanceInstructionFromToken,
     getConfidentialTransferInstructionPlan,
     getConfidentialWithdrawInstructionPlan,
+    getConfidentialTransferWithRecordInstructionPlan,
+    getConfidentialWithdrawWithRecordInstructionPlan,
     getCreateConfidentialTransferAccountInstructionPlan,
+    getEmptyConfidentialTransferAccountInstructionPlan,
 } from '@solana-program/token-2022/confidential';
 import {
     createApplyConfidentialPendingBalanceInstructionPlan,
@@ -406,24 +401,134 @@ describe('confidential operation builders', () => {
     });
 
     describe('empty-account', () => {
-        it('places the sibling ZeroCiphertext proof immediately before the token ix (offset -1)', async () => {
-            const plan: any = await createEmptyConfidentialAccountInstructionPlan({
+        // Since token-2022 0.18.0 this delegates to the upstream plan helper
+        // instead of hand-wiring a sibling ZeroCiphertext proof, so the assertion
+        // is on the arguments handed over rather than on the emitted instructions.
+        it('delegates to the upstream empty-account plan with the decoded account and ElGamal keypair', async () => {
+            const plan = await createEmptyConfidentialAccountInstructionPlan({
                 rpc: rpc as never,
                 payer,
                 tokenAccount: SOURCE_TOKEN,
                 authority: AUTHORITY,
                 keys: fakeKeys,
             });
-            expect(plan.kind).toBe('sequential');
-            expect(plan.divisible).toBe(false);
-            // [proof verify ix, empty ix] — sub-plans may be normalized to single-instruction plans.
-            const instructions = plan.plans.map((p: any) => p.instruction ?? p);
-            expect(instructions[0]).toEqual({ tag: 'verifyZero' });
-            // The empty instruction must reference the proof at offset -1 (sibling).
-            const emptyIx = instructions[1];
-            expect(emptyIx.programAddress).toBe(TOKEN_2022_PROGRAM_ADDRESS);
-            const emptyData = getEmptyConfidentialTransferAccountInstructionDataDecoder().decode(emptyIx.data);
-            expect(emptyData.proofInstructionOffset).toBe(-1);
+            expect(plan).toBe(mockEmptyPlan);
+            expect(getEmptyConfidentialTransferAccountInstructionPlan).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    payer,
+                    token: SOURCE_TOKEN,
+                    tokenAccount: mockSourceToken.data,
+                    elgamalKeypair: fakeKeys.elgamal,
+                }),
+            );
+            // The authority is normalized to a signer (a bare address becomes a noop signer).
+            const call = (getEmptyConfidentialTransferAccountInstructionPlan as jest.Mock).mock.calls[0][0];
+            expect(call.authority.address).toBe(AUTHORITY);
+        });
+
+        it('fails fast when the account is not configured for confidential transfers', async () => {
+            mockTokenByAddr[SOURCE_TOKEN] = { data: { kind: 'plainAta', extensions: { __option: 'None' } } };
+            await expect(
+                createEmptyConfidentialAccountInstructionPlan({
+                    rpc: rpc as never,
+                    payer,
+                    tokenAccount: SOURCE_TOKEN,
+                    authority: AUTHORITY,
+                    keys: fakeKeys,
+                }),
+            ).rejects.toThrow(/not configured for confidential transfers/);
+            expect(getEmptyConfidentialTransferAccountInstructionPlan).not.toHaveBeenCalled();
+        });
+
+        it('rejects keys that are not the ones the account was configured with', async () => {
+            mockTokenByAddr[SOURCE_TOKEN] = {
+                data: {
+                    kind: 'sourceTokenData',
+                    extensions: {
+                        __option: 'Some',
+                        value: [
+                            {
+                                __kind: 'ConfidentialTransferAccount',
+                                elgamalPubkey: 'Dsu111111111111111111111111111111111111111' as Address,
+                            },
+                        ],
+                    },
+                },
+            };
+            await expect(
+                createEmptyConfidentialAccountInstructionPlan({
+                    rpc: rpc as never,
+                    payer,
+                    tokenAccount: SOURCE_TOKEN,
+                    authority: AUTHORITY,
+                    keys: fakeKeys,
+                }),
+            ).rejects.toThrow();
+            expect(getEmptyConfidentialTransferAccountInstructionPlan).not.toHaveBeenCalled();
+        });
+    });
+
+    // Same opt-in as mint/burn: needed whenever an executor sets compute-unit
+    // limits, since the inline range proof leaves no room for that instruction.
+    describe('recordBackedProof', () => {
+        it('routes withdraw to the record-backed variant only when asked', async () => {
+            const inline = await createConfidentialWithdrawInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+            });
+            expect(inline).toBe(mockWithdrawPlan);
+            expect(getConfidentialWithdrawWithRecordInstructionPlan).not.toHaveBeenCalled();
+
+            const withRecord = await createConfidentialWithdrawInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+                recordBackedProof: { rentReceiver: AUTHORITY },
+            });
+            expect(withRecord).toBe(mockWithdrawWithRecordPlan);
+            expect(getConfidentialWithdrawWithRecordInstructionPlan).toHaveBeenCalledWith(
+                expect.objectContaining({ recordRentReceiver: AUTHORITY, token: SOURCE_TOKEN }),
+            );
+        });
+
+        it('routes transfer to the record-backed variant only when asked', async () => {
+            const inline = await createConfidentialTransferInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                sourceToken: SOURCE_TOKEN,
+                destinationToken: DEST_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+            });
+            expect(inline).toBe(mockTransferPlan);
+            expect(getConfidentialTransferWithRecordInstructionPlan).not.toHaveBeenCalled();
+
+            const withRecord = await createConfidentialTransferInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                sourceToken: SOURCE_TOKEN,
+                destinationToken: DEST_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+                recordBackedProof: {},
+            });
+            expect(withRecord).toBe(mockTransferWithRecordPlan);
+            expect(getConfidentialTransferWithRecordInstructionPlan).toHaveBeenCalledWith(
+                expect.objectContaining({ sourceToken: SOURCE_TOKEN, destinationToken: DEST_TOKEN }),
+            );
         });
     });
 

@@ -15,7 +15,7 @@ export {
 
 export { createConfidentialTransactionPlanner, planConfidentialInstructions } from './plan.js';
 
-export { type TokenAmount } from './util.js';
+export { type RecordBackedProof, type TokenAmount } from './util.js';
 
 export {
     createEnableConfidentialCreditsInstructionPlan,
@@ -51,6 +51,11 @@ export { createConfidentialBurnInstructionPlan, createApplyConfidentialPendingBu
 
 export { createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan } from './supply.js';
 
+// DEPRECATED. Since the 0.18.0 bump, `empty-account.ts` delegates to upstream's
+// `getEmptyConfidentialTransferAccountInstructionPlan`, which was the last
+// in-SDK consumer of this bespoke proof plumbing. Nothing in this SDK builds
+// proofs by hand any more. Kept exported so external callers that wired their
+// own flows keep working; slated for removal in a future breaking release.
 export {
     buildProofVerificationIxs,
     buildPubkeyValidityProofIxs,

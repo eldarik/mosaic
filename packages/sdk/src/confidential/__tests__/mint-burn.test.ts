@@ -18,6 +18,17 @@ const permissionedBurnPlan = { kind: 'sequential' as const, id: 'permissioned-bu
 const mockGetConfidentialMintInstructionPlan = jest.fn(async (_input: unknown) => mintPlan);
 const mockGetConfidentialBurnInstructionPlan = jest.fn(async (_input: unknown) => burnPlan);
 const mockGetPermissionedConfidentialBurnInstructionPlan = jest.fn(async (_input: unknown) => permissionedBurnPlan);
+// The record-backed variants stage the batched range proof in an SPL Record
+// account instead of inline in the verify instruction data. Distinct plan
+// identities so a test can prove which variant was dispatched to.
+const mintWithRecordPlan = { kind: 'sequential' as const, id: 'mint-with-record-plan' };
+const burnWithRecordPlan = { kind: 'sequential' as const, id: 'burn-with-record-plan' };
+const permissionedBurnWithRecordPlan = { kind: 'sequential' as const, id: 'permissioned-burn-with-record-plan' };
+const mockGetConfidentialMintWithRecordInstructionPlan = jest.fn(async (_input: unknown) => mintWithRecordPlan);
+const mockGetConfidentialBurnWithRecordInstructionPlan = jest.fn(async (_input: unknown) => burnWithRecordPlan);
+const mockGetPermissionedConfidentialBurnWithRecordInstructionPlan = jest.fn(
+    async (_input: unknown) => permissionedBurnWithRecordPlan,
+);
 /**
  * The decryptable-supply instruction the real helper builds; stubbed here because
  * `burn.ts`'s `resyncSupply` path only needs to be shown to sequence it after the
@@ -35,6 +46,12 @@ jest.mock('@solana-program/token-2022/confidential', () => ({
     getConfidentialBurnInstructionPlan: (input: unknown) => mockGetConfidentialBurnInstructionPlan(input),
     getPermissionedConfidentialBurnInstructionPlan: (input: unknown) =>
         mockGetPermissionedConfidentialBurnInstructionPlan(input),
+    getConfidentialMintWithRecordInstructionPlan: (input: unknown) =>
+        mockGetConfidentialMintWithRecordInstructionPlan(input),
+    getConfidentialBurnWithRecordInstructionPlan: (input: unknown) =>
+        mockGetConfidentialBurnWithRecordInstructionPlan(input),
+    getPermissionedConfidentialBurnWithRecordInstructionPlan: (input: unknown) =>
+        mockGetPermissionedConfidentialBurnWithRecordInstructionPlan(input),
     getUpdateConfidentialMintBurnDecryptableSupplyInstructionFromSupply: (input: unknown) =>
         mockGetUpdateDecryptableSupplyInstruction(input),
 }));
@@ -253,6 +270,76 @@ describe('confidential mint (wrapper)', () => {
             }),
         ).rejects.toThrow(/registered supply key/);
         expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
+    });
+
+    // The inline range proof leaves the verify transaction too close to the size
+    // limit to fit a compute-unit-limit instruction, so callers sending through an
+    // executor that sets CU limits must be able to opt into the record-backed form.
+    describe('recordBackedProof', () => {
+        it('uses the inline variant when the option is omitted', async () => {
+            const plan = await createConfidentialMintInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                destinationToken: DEST_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                supplyKeys: fakeSupplyKeys,
+            });
+            expect(plan).toBe(mintPlan);
+            expect(mockGetConfidentialMintWithRecordInstructionPlan).not.toHaveBeenCalled();
+        });
+
+        it('dispatches to the record-backed variant when the option is present', async () => {
+            const plan = await createConfidentialMintInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                destinationToken: DEST_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                supplyKeys: fakeSupplyKeys,
+                recordBackedProof: {},
+            });
+            expect(plan).toBe(mintWithRecordPlan);
+            expect(mockGetConfidentialMintInstructionPlan).not.toHaveBeenCalled();
+            // An empty option object must not fabricate record args; upstream
+            // defaults them (record payer -> payer, authority -> ephemeral signer).
+            expect(mockGetConfidentialMintWithRecordInstructionPlan).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    recordPayer: undefined,
+                    recordAuthority: undefined,
+                    recordRentReceiver: undefined,
+                }),
+            );
+        });
+
+        it('forwards the record payer, authority and rent receiver', async () => {
+            const recordPayer = createMockSigner('RecPayer111111111111111111111111111111111');
+            const recordAuthority = createMockSigner('RecAuth11111111111111111111111111111111111');
+            await createConfidentialMintInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                destinationToken: DEST_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                supplyKeys: fakeSupplyKeys,
+                recordBackedProof: { payer: recordPayer, authority: recordAuthority, rentReceiver: AUTHORITY },
+            });
+            expect(mockGetConfidentialMintWithRecordInstructionPlan).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    recordPayer,
+                    recordAuthority,
+                    recordRentReceiver: AUTHORITY,
+                    // The ordinary mint args must survive the record dispatch.
+                    mint: MINT,
+                    token: DEST_TOKEN,
+                    amount: 1_000_000n,
+                    supplyElgamalKeypair: fakeSupplyKeys.elgamal,
+                }),
+            );
+        });
     });
 });
 
@@ -502,6 +589,100 @@ describe('confidential burn (wrapper)', () => {
 
             expect(plan).toBe(burnPlan);
             expect(mockGetPermissionedConfidentialBurnInstructionPlan).not.toHaveBeenCalled();
+        });
+    });
+
+    // The record-backed option has to survive branch selection: the standard, the
+    // permissioned and the collapsed self-burn paths must each dispatch to their
+    // own record-backed variant rather than silently falling back to inline.
+    describe('recordBackedProof', () => {
+        it('uses the inline variant when the option is omitted', async () => {
+            const plan = await createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+            });
+            expect(plan).toBe(burnPlan);
+            expect(mockGetConfidentialBurnWithRecordInstructionPlan).not.toHaveBeenCalled();
+        });
+
+        it('dispatches the standard burn to its record-backed variant', async () => {
+            const recordAuthority = createMockSigner('RecAuth11111111111111111111111111111111111');
+            const plan = await createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: AUTHORITY,
+                amount: '2',
+                keys: fakeKeys,
+                recordBackedProof: { authority: recordAuthority },
+            });
+            expect(plan).toBe(burnWithRecordPlan);
+            expect(mockGetConfidentialBurnInstructionPlan).not.toHaveBeenCalled();
+            expect(mockGetConfidentialBurnWithRecordInstructionPlan).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    recordAuthority,
+                    mint: MINT,
+                    token: SOURCE_TOKEN,
+                    amount: 2_000_000n,
+                    sourceElgamalKeypair: fakeKeys.elgamal,
+                }),
+            );
+        });
+
+        it('dispatches the permissioned burn to its record-backed variant', async () => {
+            mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT, PERMISSIONED_BURN_EXT];
+            const burnAuthoritySigner = createMockSigner(BURN_AUTHORITY);
+
+            const plan = await createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: AUTHORITY,
+                amount: '1',
+                keys: fakeKeys,
+                permissionedBurnAuthority: burnAuthoritySigner,
+                recordBackedProof: {},
+            });
+
+            expect(plan).toBe(permissionedBurnWithRecordPlan);
+            expect(mockGetPermissionedConfidentialBurnInstructionPlan).not.toHaveBeenCalled();
+            expect(mockGetPermissionedConfidentialBurnWithRecordInstructionPlan).toHaveBeenCalledWith(
+                expect.objectContaining({ permissionedBurnAuthority: burnAuthoritySigner }),
+            );
+        });
+
+        it('keeps the self-burn single-signer collapse on the record-backed path', async () => {
+            mockMintExtensions = [MINT_BURN_EXT, TRANSFER_MINT_EXT, PERMISSIONED_BURN_EXT];
+            const ownerAndBurnAuthority = createMockSigner(BURN_AUTHORITY);
+
+            const plan = await createConfidentialBurnInstructionPlan({
+                rpc: rpc as never,
+                payer,
+                mint: MINT,
+                tokenAccount: SOURCE_TOKEN,
+                authority: ownerAndBurnAuthority,
+                amount: '1',
+                keys: fakeKeys,
+                permissionedBurnAuthority: BURN_AUTHORITY,
+                recordBackedProof: {},
+            });
+
+            expect(plan).toBe(permissionedBurnWithRecordPlan);
+            const call = mockGetPermissionedConfidentialBurnWithRecordInstructionPlan.mock.calls[0][0] as {
+                authority: unknown;
+                permissionedBurnAuthority: unknown;
+            };
+            // Both slots must hold the *same* signer object, or kit refuses to sign
+            // ("Multiple distinct signers were identified for address ...").
+            expect(call.authority).toBe(ownerAndBurnAuthority);
+            expect(call.permissionedBurnAuthority).toBe(ownerAndBurnAuthority);
         });
     });
 });

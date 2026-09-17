@@ -7,7 +7,10 @@ import {
     type TransactionSigner,
 } from '@solana/kit';
 import { fetchMint, fetchToken } from '@solana-program/token-2022';
-import { getConfidentialMintInstructionPlan } from '@solana-program/token-2022/confidential';
+import {
+    getConfidentialMintInstructionPlan,
+    getConfidentialMintWithRecordInstructionPlan,
+} from '@solana-program/token-2022/confidential';
 import {
     getConfidentialMintBurnSupplyElgamalPubkey,
     isConfidentialMintBurn,
@@ -15,7 +18,13 @@ import {
     isConfidentialTransferMint,
 } from './extensions.js';
 import { assertConfidentialKeysMatchSupply, type ConfidentialKeys } from './keys.js';
-import { type TokenAmount, tokenAmountToRaw, toAuthoritySigner } from './util.js';
+import {
+    type RecordBackedProof,
+    type TokenAmount,
+    toRecordProofArgs,
+    tokenAmountToRaw,
+    toAuthoritySigner,
+} from './util.js';
 
 /**
  * Confidentially **mints** tokens directly into a confidential balance,
@@ -55,6 +64,12 @@ export async function createConfidentialMintInstructionPlan(input: {
     supplyKeys: ConfidentialKeys;
     /** Override the auditor pubkey; defaults to the mint's configured auditor. */
     auditorElgamalPubkey?: Address;
+    /**
+     * Stage the batched range proof in an SPL Record account instead of inline in
+     * the verify instruction data. Pass this (`{}` is enough) when sending with an
+     * executor that sets compute-unit limits — see {@link RecordBackedProof}.
+     */
+    recordBackedProof?: RecordBackedProof;
 }): Promise<InstructionPlan> {
     const [mintDecoded, destinationDecoded] = await Promise.all([
         fetchMint(input.rpc, input.mint),
@@ -104,7 +119,7 @@ export async function createConfidentialMintInstructionPlan(input: {
 
     const amount = tokenAmountToRaw(input.amount, mintDecoded.data.decimals);
 
-    return getConfidentialMintInstructionPlan({
+    const args = {
         rpc: input.rpc,
         payer: input.payer,
         token: input.destinationToken,
@@ -116,5 +131,13 @@ export async function createConfidentialMintInstructionPlan(input: {
         supplyElgamalKeypair: input.supplyKeys.elgamal,
         supplyAesKey: input.supplyKeys.aes,
         auditorElgamalPubkey: input.auditorElgamalPubkey,
-    });
+    };
+
+    if (input.recordBackedProof !== undefined) {
+        return getConfidentialMintWithRecordInstructionPlan({
+            ...args,
+            ...toRecordProofArgs(input.recordBackedProof),
+        });
+    }
+    return getConfidentialMintInstructionPlan(args);
 }

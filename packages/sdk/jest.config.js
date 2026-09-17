@@ -12,7 +12,27 @@ export default {
         '__devnet__',
         ...(process.env.SKIP_INTEGRATION === 'true' ? ['integration'] : []),
     ],
+    // token-2022 >=0.17 depends on @noble/curves v2, which is ESM-only ("type":
+    // "module", no CJS build). Its CJS bundle `require()`s it, which real Node
+    // 20.19+/22.12+ handles via require(esm) but jest's CJS runtime does not.
+    // Jest here runs in CJS mode (the suite relies on the `jest` global and
+    // jest.mock), so the fix is to let jest transform @noble down to CJS rather
+    // than to switch the whole suite to --experimental-vm-modules.
+    transformIgnorePatterns: ['/node_modules/(?!.*@noble)'],
     transform: {
+        // Down-level the ESM-only @noble packages (see transformIgnorePatterns).
+        '^.+\\.js$': [
+            'ts-jest',
+            {
+                useESM: false,
+                tsconfig: {
+                    allowJs: true,
+                    module: 'commonjs',
+                    moduleResolution: 'bundler',
+                    target: 'es2022',
+                },
+            },
+        ],
         '^.+\\.ts$': [
             'ts-jest',
             {

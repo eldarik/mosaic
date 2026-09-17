@@ -7,11 +7,20 @@ import {
     type TransactionSigner,
 } from '@solana/kit';
 import { fetchToken } from '@solana-program/token-2022';
-import { getConfidentialWithdrawInstructionPlan } from '@solana-program/token-2022/confidential';
+import {
+    getConfidentialWithdrawInstructionPlan,
+    getConfidentialWithdrawWithRecordInstructionPlan,
+} from '@solana-program/token-2022/confidential';
 import { confidentialMintBurnConversionError, mintHasConfidentialMintBurnExtension } from '../transaction-util.js';
 import { getConfidentialTransferAccountElgamalPubkey } from './extensions.js';
 import { assertConfidentialKeysMatchAccount, type ConfidentialKeys } from './keys.js';
-import { type TokenAmount, resolveRawAmount, toAuthoritySigner } from './util.js';
+import {
+    type RecordBackedProof,
+    type TokenAmount,
+    resolveRawAmount,
+    toRecordProofArgs,
+    toAuthoritySigner,
+} from './util.js';
 
 /**
  * Withdraws tokens from the account's **available confidential** balance back to
@@ -42,6 +51,12 @@ export async function createConfidentialWithdrawInstructionPlan(input: {
     amount: TokenAmount;
     /** ElGamal keypair + AES key for this account. */
     keys: ConfidentialKeys;
+    /**
+     * Stage the batched range proof in an SPL Record account instead of inline in
+     * the verify instruction data. Pass this (`{}` is enough) when sending with an
+     * executor that sets compute-unit limits — see {@link RecordBackedProof}.
+     */
+    recordBackedProof?: RecordBackedProof;
 }): Promise<InstructionPlan> {
     const [{ rawAmount, decimals, extensions }, decoded] = await Promise.all([
         resolveRawAmount(input.rpc, input.mint, input.amount),
@@ -56,7 +71,7 @@ export async function createConfidentialWithdrawInstructionPlan(input: {
         assertConfidentialKeysMatchAccount(input.keys, registeredElgamalPubkey, `token account ${input.tokenAccount}`);
     }
 
-    return getConfidentialWithdrawInstructionPlan({
+    const args = {
         rpc: input.rpc,
         payer: input.payer,
         token: input.tokenAccount,
@@ -67,5 +82,13 @@ export async function createConfidentialWithdrawInstructionPlan(input: {
         decimals,
         elgamalKeypair: input.keys.elgamal,
         aesKey: input.keys.aes,
-    });
+    };
+
+    if (input.recordBackedProof !== undefined) {
+        return getConfidentialWithdrawWithRecordInstructionPlan({
+            ...args,
+            ...toRecordProofArgs(input.recordBackedProof),
+        });
+    }
+    return getConfidentialWithdrawInstructionPlan(args);
 }
