@@ -16,15 +16,22 @@ export function toAuthoritySigner(authority: Address | TransactionSigner): Trans
  *
  * Why this exists: the inline form keeps the flow to a minimal number of
  * transactions, but leaves the range-proof transaction sitting so close to the
- * transaction size limit that it cannot fit an extra compute-unit-limit
+ * 1232-byte version-0 size limit that it cannot fit an extra compute-unit-limit
  * instruction. Callers that send with a transaction plan executor which
  * estimates and sets CU limits (kit's default does) therefore push that
  * transaction over the limit. Passing `recordBackedProof` shrinks it back below
  * the limit, at the cost of extra transactions to create, write and close the
  * record account.
  *
- * Rule of thumb: omit it when you sign and send the plan's transactions
- * yourself; pass it (`{}` is enough) when an executor sets compute-unit limits.
+ * **This is a version-0 workaround.** Version-1 transactions carry the
+ * compute-unit limit in a header field rather than an instruction, and give the
+ * message 4096 bytes instead of 1232, so the inline proof fits with room to
+ * spare. Plan with `version: 1` (see `createConfidentialTransactionPlanner`) and
+ * leave this option off: it only adds transactions and rent churn there.
+ *
+ * Rule of thumb for version 0: omit it when you sign and send the plan's
+ * transactions yourself; pass it (`{}` is enough) when an executor sets
+ * compute-unit limits.
  *
  * Supported by the confidential mint, burn, transfer and withdraw builders.
  */

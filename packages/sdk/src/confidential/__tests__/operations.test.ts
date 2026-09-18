@@ -1,5 +1,18 @@
-import type { Address } from '@solana/kit';
-import { generateKeyPairSigner, getAddressEncoder } from '@solana/kit';
+import type {
+    Address,
+    Rpc,
+    SimulateTransactionApi,
+    TransactionMessage,
+    TransactionMessageWithFeePayer,
+} from '@solana/kit';
+import {
+    blockhash,
+    flattenTransactionPlan,
+    generateKeyPairSigner,
+    getAddressEncoder,
+    parallelInstructionPlan,
+    setTransactionMessageLifetimeUsingBlockhash,
+} from '@solana/kit';
 import { createMockRpc, createMockSigner, seedMintDetails } from '../../__tests__/test-utils.js';
 import type { ConfidentialKeys } from '../keys.js';
 
@@ -77,6 +90,8 @@ import {
     createEmptyConfidentialAccountInstructionPlan,
     createEnableConfidentialCreditsInstructionPlan,
     createDisableNonConfidentialCreditsInstructionPlan,
+    createConfidentialTransactionPlanner,
+    estimateAndSetConfidentialResourceLimits,
     planConfidentialInstructions,
 } from '../index.js';
 
@@ -533,7 +548,7 @@ describe('confidential operation builders', () => {
     });
 
     describe('planConfidentialInstructions', () => {
-        it('packs a single-instruction plan into one fee-payer-bound transaction', async () => {
+        it('packs a single-instruction plan into one fee-payer-bound version-0 transaction', async () => {
             // The planner compiles the message to size it, so use real addresses.
             const feePayer = await generateKeyPairSigner();
             const owner = await generateKeyPairSigner();
@@ -544,6 +559,116 @@ describe('confidential operation builders', () => {
             const txPlan: any = await planConfidentialInstructions({ instructionPlan, feePayer });
             expect(txPlan.kind).toBe('single');
             expect(txPlan.message.feePayer.address).toBe(feePayer.address);
+            // Default stays version 0, with no resource limits written — the
+            // runtime's 200k-CU-per-instruction fallback still applies there.
+            expect(txPlan.message.version).toBe(0);
+            expect(txPlan.message.config).toBeUndefined();
+        });
+
+        it('packs version-1 messages with provisory resource limits when asked', async () => {
+            const feePayer = await generateKeyPairSigner();
+            const owner = await generateKeyPairSigner();
+            const instructionPlan = createEnableConfidentialCreditsInstructionPlan({
+                tokenAccount: SOURCE_TOKEN,
+                authority: owner,
+            });
+            const txPlan: any = await planConfidentialInstructions({ instructionPlan, feePayer, version: 1 });
+            expect(txPlan.kind).toBe('single');
+            expect(txPlan.message.version).toBe(1);
+            // Version 1 defaults both limits to zero on chain, so the fields must
+            // be present (at kit's provisory value) for the send path to replace.
+            expect(txPlan.message.config).toEqual({ computeUnitLimit: 0, loadedAccountsDataSizeLimit: 0 });
+        });
+
+        it('fits more instructions per transaction at version 1 than at version 0', async () => {
+            // Synthetic oversized instructions rather than real confidential ones:
+            // the upstream plan helpers are mocked here, and what is under test is
+            // the packing budget (1232 vs 4096 bytes), not the proof shapes.
+            const feePayer = await generateKeyPairSigner();
+            const program = (await generateKeyPairSigner()).address;
+            const bigInstruction = (fill: number) => ({
+                programAddress: program,
+                data: new Uint8Array(500).fill(fill),
+            });
+            const instructionPlan = parallelInstructionPlan([1, 2, 3, 4].map(bigInstruction));
+
+            const v0 = await createConfidentialTransactionPlanner(feePayer)(instructionPlan);
+            const v1 = await createConfidentialTransactionPlanner(feePayer, { version: 1 })(instructionPlan);
+
+            expect(flattenTransactionPlan(v0)).toHaveLength(2);
+            expect(flattenTransactionPlan(v1)).toHaveLength(1);
+        });
+    });
+
+    describe('estimateAndSetConfidentialResourceLimits', () => {
+        const LIFETIME = {
+            blockhash: blockhash('11111111111111111111111111111111'),
+            lastValidBlockHeight: 100n,
+        };
+
+        /** Minimal `simulateTransaction`-only RPC returning a fixed simulation result. */
+        function mockSimulationRpc(value: Record<string, unknown>): Rpc<SimulateTransactionApi> {
+            return {
+                simulateTransaction: jest.fn(() => ({ send: jest.fn(async () => ({ value })) })),
+            } as unknown as Rpc<SimulateTransactionApi>;
+        }
+
+        async function planOne(version: 0 | 1): Promise<TransactionMessage & TransactionMessageWithFeePayer> {
+            const feePayer = await generateKeyPairSigner();
+            const owner = await generateKeyPairSigner();
+            const txPlan: any = await planConfidentialInstructions({
+                instructionPlan: createEnableConfidentialCreditsInstructionPlan({
+                    tokenAccount: SOURCE_TOKEN,
+                    authority: owner,
+                }),
+                feePayer,
+                version,
+            });
+            return txPlan.message;
+        }
+
+        it('rejects a planned message that has no lifetime yet', async () => {
+            // Planned messages are deliberately lifetime-free; simulating one
+            // would fail deep inside kit's compile step instead.
+            await expect(
+                estimateAndSetConfidentialResourceLimits({
+                    rpc: mockSimulationRpc({ err: null, unitsConsumed: 1n }),
+                    transactionMessage: await planOne(1),
+                }),
+            ).rejects.toThrow(/without a lifetime/);
+        });
+
+        it('replaces version-1 provisory limits with the simulated values', async () => {
+            const message = setTransactionMessageLifetimeUsingBlockhash(LIFETIME, await planOne(1));
+            const updated: any = await estimateAndSetConfidentialResourceLimits({
+                rpc: mockSimulationRpc({ err: null, unitsConsumed: 123_456n, loadedAccountsDataSize: 65_536 }),
+                transactionMessage: message,
+            });
+            expect(updated.config).toEqual({ computeUnitLimit: 123_456, loadedAccountsDataSizeLimit: 65_536 });
+        });
+
+        it('throws for version 1 when the RPC omits the loaded-accounts data size', async () => {
+            // Version 1 cannot be sent without this limit, so a silent fallback
+            // would only surface as MaxLoadedAccountsDataSizeExceeded on chain.
+            const message = setTransactionMessageLifetimeUsingBlockhash(LIFETIME, await planOne(1));
+            await expect(
+                estimateAndSetConfidentialResourceLimits({
+                    rpc: mockSimulationRpc({ err: null, unitsConsumed: 123_456n }),
+                    transactionMessage: message,
+                }),
+            ).rejects.toThrow();
+        });
+
+        it('sets only a compute-unit-limit instruction on version-0 messages', async () => {
+            const message = setTransactionMessageLifetimeUsingBlockhash(LIFETIME, await planOne(0));
+            const updated: any = await estimateAndSetConfidentialResourceLimits({
+                rpc: mockSimulationRpc({ err: null, unitsConsumed: 99_000n }),
+                transactionMessage: message,
+            });
+            expect(updated.config).toBeUndefined();
+            // The added ComputeBudget instruction is what makes `recordBackedProof`
+            // necessary at version 0: it grows an already size-critical message.
+            expect(updated.instructions.length).toBe(message.instructions.length + 1);
         });
     });
 });

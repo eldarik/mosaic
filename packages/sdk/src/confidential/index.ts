@@ -13,7 +13,13 @@ export {
     type ConfidentialMintBurnInit,
 } from './keys.js';
 
-export { createConfidentialTransactionPlanner, planConfidentialInstructions } from './plan.js';
+export {
+    createConfidentialTransactionPlanner,
+    estimateAndSetConfidentialResourceLimits,
+    planConfidentialInstructions,
+    type ConfidentialPlannerOptions,
+    type ConfidentialTransactionVersion,
+} from './plan.js';
 
 export { type RecordBackedProof, type TokenAmount } from './util.js';
 
