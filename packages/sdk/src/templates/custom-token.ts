@@ -1,5 +1,5 @@
 import { Token } from '../issuance/index.js';
-import type { ConfidentialBalancesConfig } from '../issuance/create-mint.js';
+import type { ConfidentialBalancesConfig, ConfidentialMintBurnOptions } from '../issuance/create-mint.js';
 import type { Rpc, Address, SolanaRpcApi, TransactionSigner } from '@solana/kit';
 import type { FullTransaction } from '../transaction-util.js';
 import {
@@ -54,6 +54,10 @@ export const createCustomTokenInitTransaction = async (
         // added at all — except on the sRFC-37 path, which requires it.
         enableDefaultAccountState?: boolean;
         enableConfidentialBalances?: boolean;
+        // Adds the ConfidentialMintBurn extension. Requires `enableConfidentialBalances`:
+        // a mint-burn mint keeps its whole supply encrypted, so it needs the
+        // ConfidentialTransferMint extension to hold that supply in accounts.
+        enableConfidentialMintBurn?: boolean;
         enableScaledUiAmount?: boolean;
         enableSrfc37?: boolean;
         enableTransferFee?: boolean;
@@ -87,6 +91,11 @@ export const createCustomTokenInitTransaction = async (
         // Confidential Balances policy / auditor (only read when
         // `enableConfidentialBalances` is truthy).
         confidentialBalances?: ConfidentialBalancesConfig;
+
+        // Confidential Mint/Burn init values (required when `enableConfidentialMintBurn`
+        // is truthy). Both come from the supply authority's own wallet keys — see
+        // `getConfidentialMintBurnInit` in `@solana/mosaic-sdk/confidential`.
+        confidentialMintBurn?: ConfidentialMintBurnOptions;
 
         // Freeze authority.
         // Note: ignored when `enableSrfc37: true` — the sRFC-37 path forces the freeze
@@ -184,6 +193,18 @@ export const createCustomTokenInitTransaction = async (
             authority: confidentialBalancesAuthority,
             ...options.confidentialBalances,
         });
+    }
+
+    // Add Confidential Mint/Burn extension. Must follow the confidential-balances
+    // block above: `withConfidentialMintBurn` refuses to run before
+    // `ConfidentialTransferMint` is on the builder.
+    if (options?.enableConfidentialMintBurn) {
+        if (!options.confidentialMintBurn) {
+            throw new Error(
+                'confidentialMintBurn is required when enableConfidentialMintBurn is set: the supply ElGamal pubkey and the initial decryptable supply are derived from the supply authority wallet (see getConfidentialMintBurnInit).',
+            );
+        }
+        tokenBuilder = tokenBuilder.withConfidentialMintBurn(options.confidentialMintBurn);
     }
 
     // Add Scaled UI Amount extension

@@ -23,6 +23,21 @@ export {
 
 export { type RecordBackedProof, type TokenAmount } from './util.js';
 
+// Extension readers. Every builder here fails fast on its own, but a caller that
+// wants to check a mint or account *before* asking for keys — to decide which
+// endpoint to offer, or to verify a supply wallet still matches the mint — needs
+// the same readers the builders use.
+export {
+    isConfidentialMintBurn,
+    isConfidentialTransferMint,
+    isConfidentialTransferAccount,
+    getConfidentialTransferAccountElgamalPubkey,
+    getConfidentialMintBurnSupplyElgamalPubkey,
+    mintHasConfidentialTransferFee,
+    type DecodedMint,
+    type DecodedToken,
+} from './extensions.js';
+
 export {
     createEnableConfidentialCreditsInstructionPlan,
     createDisableConfidentialCreditsInstructionPlan,
