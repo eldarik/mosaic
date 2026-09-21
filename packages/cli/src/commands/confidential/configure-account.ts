@@ -22,17 +22,14 @@ export const configureAccountCommand = new Command('configure-account')
         const spinner = createSpinner('Configuring confidential account...', opts.rawTx);
 
         await withErrorHandling(spinner, 'Failed to configure confidential account', async () => {
-            const {
-                createConfigureConfidentialAccountInstructionPlan,
-                deriveConfidentialKeysForOwnerMint,
-                freeConfidentialKeys,
-            } = await import('@solana/mosaic-sdk/confidential');
+            const { createConfigureConfidentialAccountInstructionPlan, deriveConfidentialKeys, freeConfidentialKeys } =
+                await import('@solana/mosaic-sdk/confidential');
             const rpc = createRpcClient(opts.rpcUrl);
             const signer = await loadKeysSigner(opts);
             const mint = options.mint as Address;
             const tokenAccount = await resolveTokenAccount(mint, signer.address, options.tokenAccount);
 
-            const keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint });
+            const keys = await deriveConfidentialKeys({ signer });
             try {
                 const plan = await createConfigureConfidentialAccountInstructionPlan({
                     rpc,

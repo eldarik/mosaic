@@ -35,7 +35,7 @@ export const inspectAccountCommand = new Command('inspect-account')
         const spinner = createSpinner('Inspecting confidential account...');
 
         await withErrorHandling(spinner, 'Failed to inspect confidential account', async () => {
-            const { deriveConfidentialKeysForOwnerMint, freeConfidentialKeys, inspectConfidentialAccount } =
+            const { deriveConfidentialKeys, freeConfidentialKeys, inspectConfidentialAccount } =
                 await import('@solana/mosaic-sdk/confidential');
             const rpc = createRpcClient(opts.rpcUrl);
             const mint = options.mint as Address;
@@ -49,11 +49,11 @@ export const inspectAccountCommand = new Command('inspect-account')
             }
             const tokenAccount = await resolveTokenAccount(mint, owner as Address, options.tokenAccount);
 
-            // Only derive keys (and decrypt) when inspecting the signer's own ATA — keys
-            // derived for another owner can't decrypt someone else's balances.
+            // Only derive keys (and decrypt) when inspecting the signer's own ATA. Keys
+            // are wallet-only, so ours can't decrypt an account belonging to anyone else.
             let keys: ConfidentialKeys | undefined;
             if (signer && !options.tokenAccount) {
-                keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint });
+                keys = await deriveConfidentialKeys({ signer });
             }
 
             try {

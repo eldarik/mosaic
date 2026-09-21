@@ -8,6 +8,7 @@ export {
     satisfiesStablecoinPattern,
     satisfiesArcadeTokenPattern,
     satisfiesSecurityTokenPattern,
+    TOKEN_TYPE_LABELS,
 } from './inspect-token.js';
 export type {
     TokenMetadata,

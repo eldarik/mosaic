@@ -22,7 +22,7 @@ export const applyCommand = new Command('apply')
         await withErrorHandling(spinner, 'Failed to apply pending balance', async () => {
             const {
                 createApplyConfidentialPendingBalanceInstructionPlan,
-                deriveConfidentialKeysForOwnerMint,
+                deriveConfidentialKeys,
                 freeConfidentialKeys,
             } = await import('@solana/mosaic-sdk/confidential');
             const rpc = createRpcClient(opts.rpcUrl);
@@ -30,7 +30,7 @@ export const applyCommand = new Command('apply')
             const mint = options.mint as Address;
             const tokenAccount = await resolveTokenAccount(mint, signer.address, options.tokenAccount);
 
-            const keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint });
+            const keys = await deriveConfidentialKeys({ signer });
             try {
                 const plan = await createApplyConfidentialPendingBalanceInstructionPlan({
                     rpc,

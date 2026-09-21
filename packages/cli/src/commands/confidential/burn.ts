@@ -31,11 +31,12 @@ export const burnCommand = new Command('burn')
         const spinner = createSpinner('Preparing confidential burn...', opts.rawTx);
 
         await withErrorHandling(spinner, 'Failed to complete confidential burn', async () => {
-            const { createConfidentialBurnInstructionPlan, deriveConfidentialKeysForOwnerMint, freeConfidentialKeys } =
+            const { createConfidentialBurnInstructionPlan, deriveConfidentialKeys, freeConfidentialKeys } =
                 await import('@solana/mosaic-sdk/confidential');
             const rpc = createRpcClient(opts.rpcUrl);
-            // The signer here is the account owner — burn is authored with account keys
-            // bound to (owner, mint), as with transfer/withdraw.
+            // The signer here is the account owner — burn is authored with the owner's
+            // wallet-only account keys, as with transfer/withdraw (not the mint's supply
+            // keys, which only `confidential mint` and `confidential supply` use).
             const signer = await loadKeysSigner(opts);
             const mint = options.mint as Address;
             const tokenAccount = await resolveTokenAccount(mint, signer.address, options.tokenAccount);
@@ -47,7 +48,7 @@ export const burnCommand = new Command('burn')
                 ? await loadKeypair(options.permissionedBurnAuthority)
                 : undefined;
 
-            const keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint });
+            const keys = await deriveConfidentialKeys({ signer });
             try {
                 const plan = await createConfidentialBurnInstructionPlan({
                     rpc,

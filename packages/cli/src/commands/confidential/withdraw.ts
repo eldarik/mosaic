@@ -22,17 +22,14 @@ export const withdrawCommand = new Command('withdraw')
         const spinner = createSpinner('Preparing confidential withdrawal...', opts.rawTx);
 
         await withErrorHandling(spinner, 'Failed to withdraw confidential balance', async () => {
-            const {
-                createConfidentialWithdrawInstructionPlan,
-                deriveConfidentialKeysForOwnerMint,
-                freeConfidentialKeys,
-            } = await import('@solana/mosaic-sdk/confidential');
+            const { createConfidentialWithdrawInstructionPlan, deriveConfidentialKeys, freeConfidentialKeys } =
+                await import('@solana/mosaic-sdk/confidential');
             const rpc = createRpcClient(opts.rpcUrl);
             const signer = await loadKeysSigner(opts);
             const mint = options.mint as Address;
             const tokenAccount = await resolveTokenAccount(mint, signer.address, options.tokenAccount);
 
-            const keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint });
+            const keys = await deriveConfidentialKeys({ signer });
             try {
                 const plan = await createConfidentialWithdrawInstructionPlan({
                     rpc,

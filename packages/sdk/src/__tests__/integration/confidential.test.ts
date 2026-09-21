@@ -33,7 +33,7 @@ import {
     createConfidentialWithdrawInstructionPlan,
     createConfigureConfidentialAccountInstructionPlan,
     createEmptyConfidentialAccountInstructionPlan,
-    deriveConfidentialKeysForOwnerMint,
+    deriveConfidentialKeys,
     deriveConfidentialSupplyKeys,
     freeConfidentialKeys,
     getConfidentialMintBurnInit,
@@ -328,17 +328,9 @@ describeSkipIf(!RUN)('confidential transfer (devnet e2e)', () => {
         record('create-mint', [await signSendConfirm(rpc, createMintTx)]);
         await waitForToken2022Account(rpc, mint.address);
 
-        // Derive sender + recipient confidential keys, bound to (owner, mint).
-        const senderKeys = await deriveConfidentialKeysForOwnerMint({
-            signer: payer,
-            owner: payer.address,
-            mint: mint.address,
-        });
-        const recipientKeys = await deriveConfidentialKeysForOwnerMint({
-            signer: recipient,
-            owner: recipient.address,
-            mint: mint.address,
-        });
+        // Derive sender + recipient confidential keys, bound to the wallet alone.
+        const senderKeys = await deriveConfidentialKeys({ signer: payer });
+        const recipientKeys = await deriveConfidentialKeys({ signer: recipient });
 
         try {
             // 2. Configure both accounts for confidential transfers.
@@ -527,11 +519,7 @@ describeSkipIf(!RUN)('confidential transfer (devnet e2e)', () => {
         // supply; they must be derived before the mint so their init values can
         // be baked into the ConfidentialMintBurn extension.
         const supplyKeys = await deriveConfidentialSupplyKeys({ signer: payer, mint: mint.address });
-        const ownerKeys = await deriveConfidentialKeysForOwnerMint({
-            signer: holder,
-            owner: holder.address,
-            mint: mint.address,
-        });
+        const ownerKeys = await deriveConfidentialKeys({ signer: holder });
         // Guard the point of using a separate holder: if these ever coincide, the
         // supply/account key assertions below stop proving anything.
         expect(new Uint8Array(supplyKeys.aes.toBytes())).not.toEqual(new Uint8Array(ownerKeys.aes.toBytes()));

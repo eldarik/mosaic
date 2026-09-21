@@ -265,25 +265,35 @@ freeConfidentialKeys(supplyKeys); // once you no longer need them for mint/burn
 
 ### 2. Derive account keys
 
-Each holder derives ElGamal + AES keys bound to `(owner, mint)` from a signature —
-they are deterministic and never stored on-chain. One signature yields both keys.
+Each holder derives ElGamal + AES keys from a wallet signature — deterministic, never
+stored on-chain, and **wallet-only**: there is no seed, so the same signer always derives
+the same keys for every mint and account it holds. One signature yields both keys. This
+is the `solana-conf-bal/v1` standard, so keys derived here are byte-identical to keys
+derived by any other conforming client for the same wallet.
 
-> Account keys and the mint authority's **supply** keys (step 1) use separate
-> derivation domains, so a mint authority that also holds a confidential account of its
-> own mint gets two independent key sets. Sharing account keys — with an auditor, with
-> support, in a backup — therefore never exposes the total-supply keys.
+> The mint authority's **supply** keys (step 1) are the one exception: they are seeded
+> under a separate `mosaic-conf-supply/v1` domain tag, so they can never coincide with
+> that same authority's wallet-only account keys. Sharing account keys — with an auditor,
+> with support, in a backup — therefore never exposes the total-supply keys.
 
 ```ts
-import { deriveConfidentialKeysForOwnerMint, freeConfidentialKeys } from '@solana/mosaic-sdk/confidential';
+import { deriveConfidentialKeys, freeConfidentialKeys } from '@solana/mosaic-sdk/confidential';
 
-const keys = await deriveConfidentialKeysForOwnerMint({
+const keys = await deriveConfidentialKeys({
     signer: owner, // a MessagePartialSigner (wallet / filesystem keypair)
-    owner: owner.address,
-    mint: 'MintPubkey...',
 });
 // ... use keys ...
 freeConfidentialKeys(keys); // release WASM memory when done
 ```
+
+> **Browser wallets.** Don't feed a UI wallet-connection framework's own `signMessage`
+> straight into `signer` above — several such libraries mishandle the Wallet Standard
+> `solana:signMessage` result or silently demote specific wallets to a broken signing
+> path. Import `@solana/mosaic-sdk/confidential/wallet-standard` and wrap your
+> framework's fallback signer with `createResilientSignMessage(owner, fallbackSignMessage)`,
+> then `createMessageSigner(owner, signMessage)` to get the `MessagePartialSigner` this
+> function needs. That signer only signs the canonical empty-seed message, so it cannot
+> derive the supply keys of step 1 — those come from a signer that signs arbitrary bytes.
 
 ### 3. Configure the account
 

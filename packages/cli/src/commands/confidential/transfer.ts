@@ -28,11 +28,8 @@ export const transferCommand = new Command('transfer')
         const spinner = createSpinner('Preparing confidential transfer...', opts.rawTx);
 
         await withErrorHandling(spinner, 'Failed to complete confidential transfer', async () => {
-            const {
-                createConfidentialTransferInstructionPlan,
-                deriveConfidentialKeysForOwnerMint,
-                freeConfidentialKeys,
-            } = await import('@solana/mosaic-sdk/confidential');
+            const { createConfidentialTransferInstructionPlan, deriveConfidentialKeys, freeConfidentialKeys } =
+                await import('@solana/mosaic-sdk/confidential');
             const rpc = createRpcClient(opts.rpcUrl);
             const signer = await loadKeysSigner(opts);
             const mint = options.mint as Address;
@@ -41,7 +38,7 @@ export const transferCommand = new Command('transfer')
                 ? (options.toTokenAccount as Address)
                 : await resolveTokenAccount(mint, options.to as Address);
 
-            const keys = await deriveConfidentialKeysForOwnerMint({ signer, owner: signer.address, mint });
+            const keys = await deriveConfidentialKeys({ signer });
             try {
                 const plan = await createConfidentialTransferInstructionPlan({
                     rpc,
