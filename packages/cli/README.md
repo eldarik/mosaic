@@ -221,10 +221,16 @@ mosaic confidential burn \
   [--token-account <address>] \
   [--auditor-elgamal-pubkey <address>]
 
-# Apply the mint's accumulated pending burn into its confidential supply (mint authority)
-mosaic confidential apply-pending-burn --mint <mint>
+# Apply the mint's accumulated pending burn into its confidential supply (mint authority).
+# --supply is the true total supply AFTER this apply, in raw base units: the command
+# re-encrypts the mint's decryptable supply in the same transaction, which is what keeps
+# the next confidential mint's equality proof valid. It is asserted, not verified — track
+# the supply yourself (mint amounts added, applied burn amounts subtracted).
+mosaic confidential apply-pending-burn --mint <mint> --supply <raw_base_units>
 
-# Re-assert the mint's decryptable supply under the supply AES key (mint authority)
+# Re-assert the mint's decryptable supply under the supply AES key (mint authority).
+# A repair tool: only needed if the supply drifted (e.g. an apply-pending-burn from an
+# older CLI, or a wrong --supply). The normal cycle never needs it.
 mosaic confidential update-supply --mint <mint> --supply <raw_base_units>
 
 # Prove the available balance is zero so the account can be closed
