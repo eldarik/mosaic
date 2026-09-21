@@ -254,15 +254,16 @@ freeConfidentialKeys(supplyKeys); // once you no longer need them for mint/burn
 > value, so Token-2022 rejects **every** plaintext↔confidential conversion on it with
 > `IllegalMintBurnConversion`:
 >
-> | Operation                                              | On a `ConfidentialMintBurn` mint       |
-> | ------------------------------------------------------ | -------------------------------------- |
-> | `createMintToTransaction` (plaintext mint)             | ✗ rejected — use the confidential mint |
-> | `createBurnTransaction` / `createForceBurnTransaction` | ✗ rejected — use the confidential burn |
-> | `createConfidentialDepositInstructionPlan`             | ✗ rejected — nothing to deposit from   |
-> | `createConfidentialWithdrawInstructionPlan`            | ✗ rejected — nowhere to withdraw to    |
-> | `createConfidentialTransferInstructionPlan`            | ✓ supported                            |
+> | Operation                                                     | On a `ConfidentialMintBurn` mint        |
+> | ------------------------------------------------------------- | --------------------------------------- |
+> | `createMintToTransaction` (plaintext mint)                    | ✗ rejected — use the confidential mint  |
+> | `createBurnTransaction` / `createPermissionedBurnTransaction` | ✗ rejected — use the confidential burn  |
+> | `createForceBurnTransaction` (permanent delegate)             | ✗ rejected — no confidential equivalent |
+> | `createConfidentialDepositInstructionPlan`                    | ✗ rejected — nothing to deposit from    |
+> | `createConfidentialWithdrawInstructionPlan`                   | ✗ rejected — nowhere to withdraw to     |
+> | `createConfidentialTransferInstructionPlan`                   | ✓ supported                             |
 >
-> All five rejected builders fail fast client-side rather than emitting a doomed
+> All six rejected builders fail fast client-side rather than emitting a doomed
 > transaction. Issuance and redemption go exclusively through
 > `createConfidentialMintInstructionPlan` / `createConfidentialBurnInstructionPlan`
 > (step 5), and **holders have no route back to a plaintext balance** — plan for that
@@ -442,7 +443,8 @@ const burn = await createConfidentialBurnInstructionPlan({
 
 // Apply the mint's accumulated pending burn into its confidential supply (mint authority),
 // re-syncing the decryptable supply in the same plan — see the warning below.
-const applyBurn = createApplyConfidentialPendingBurnInstructionPlan({
+const applyBurn = await createApplyConfidentialPendingBurnInstructionPlan({
+    rpc,
     mint: 'MintPubkey...',
     authority: mintAuthority,
     resyncSupply: {
@@ -490,6 +492,38 @@ const plan = await planConfidentialInstructions({ instructionPlan: transfer, fee
 // plan.kind === 'single' → one message; otherwise walk plan.plans in order,
 // adding a fresh blockhash, signing, and sending each.
 ```
+
+#### Transaction v1 (SIMD-0385)
+
+Messages are packed as version-0 transactions by default. Pass `version: 1` to pack them as [SIMD-0385](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0385-transaction-v1.md) transactions instead, which raises the per-transaction budget from 1232 to 4096 bytes and therefore folds proof setup, the token instruction and cleanup into far fewer transactions — fewer signatures, fewer round trips, less context-state rent churn for the same operation.
+
+```ts
+const plan = await planConfidentialInstructions({ instructionPlan: transfer, feePayer, version: 1 });
+```
+
+The version is an option rather than a global switch because it is a wire-compatibility choice that belongs to you: version 1 needs Agave ≥ 4.2.2 on the RPC, and wallet and multisig support varies. The `txv1` feature gate is live on mainnet, devnet and testnet; legacy and version-0 transactions keep working unchanged.
+
+> **Version 1 makes resource limits your responsibility.** Legacy and version-0 transactions fall back to the runtime default of 200k compute units per instruction when no limit is set. Version 1 has no such fallback: `computeUnitLimit` and `loadedAccountsDataSizeLimit` are header fields that **default to zero**, so a message sent without them is budgeted 0 CUs and 0 loaded-account bytes and fails on chain.
+>
+> The planner fills both with kit's _provisory_ value (`0`) while packing, so the fields occupy their real wire bytes and the size accounting is correct. Replacing them with real estimates is the send path's job:
+
+```ts
+import { estimateAndSetConfidentialResourceLimits } from '@solana/mosaic-sdk/confidential';
+
+// Per transaction, after the lifetime is set and immediately before signing.
+const withLimits = await estimateAndSetConfidentialResourceLimits({
+    rpc,
+    transactionMessage: setTransactionMessageLifetimeUsingBlockhash(blockhash, message),
+});
+const signed = await signTransactionMessageWithSigners(withLimits);
+```
+
+Do this per transaction as the plan progresses, not once over the whole plan up front: simulation needs a lifetime (planned messages deliberately have none), and a plan's later transactions read proof context-state accounts that its own earlier transactions create, so simulating them before those land fails on a missing account.
+
+Two consequences for version 1 worth knowing:
+
+- **`recordBackedProof` is a version-0 workaround.** It exists only because a version-0 range-proof transaction sits too close to 1232 bytes to also fit a compute-unit-limit _instruction_. Version 1 carries that limit in a header field and has 4096 bytes, so leave the option off — there it only adds transactions and rent churn.
+- **No address lookup tables.** Version 1 inlines all accounts (max 64 accounts, 64 instructions, no duplicates). With 4096 raw bytes that is not a constraint for these flows, but "version 1" and "compressed via a lookup table" are mutually exclusive.
 
 ### Inspecting confidential accounts
 

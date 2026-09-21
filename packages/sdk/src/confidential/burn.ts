@@ -11,7 +11,9 @@ import {
 import { fetchMint, fetchToken, getApplyConfidentialPendingBurnInstruction } from '@solana-program/token-2022';
 import {
     getConfidentialBurnInstructionPlan,
+    getConfidentialBurnWithRecordInstructionPlan,
     getPermissionedConfidentialBurnInstructionPlan,
+    getPermissionedConfidentialBurnWithRecordInstructionPlan,
 } from '@solana-program/token-2022/confidential';
 import { getPermissionedBurnAuthorityFromMint } from '../transaction-util.js';
 import {
@@ -21,8 +23,14 @@ import {
     isConfidentialTransferMint,
 } from './extensions.js';
 import { assertConfidentialKeysMatchAccount, type ConfidentialKeys } from './keys.js';
-import { createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan } from './supply.js';
-import { type TokenAmount, tokenAmountToRaw, toAuthoritySigner } from './util.js';
+import { assertConfidentialSupplyKeysForMint, buildUpdateDecryptableSupplyPlan } from './supply.js';
+import {
+    type RecordBackedProof,
+    type TokenAmount,
+    toRecordProofArgs,
+    tokenAmountToRaw,
+    toAuthoritySigner,
+} from './util.js';
 
 /**
  * Confidentially **burns** tokens from an account's available confidential
@@ -70,6 +78,13 @@ export async function createConfidentialBurnInstructionPlan(input: {
      * otherwise. A bare address becomes a no-op signer.
      */
     permissionedBurnAuthority?: Address | TransactionSigner;
+    /**
+     * Stage the batched range proof in an SPL Record account instead of inline in
+     * the verify instruction data. Pass this (`{}` is enough) when sending with an
+     * executor that sets compute-unit limits — see {@link RecordBackedProof}.
+     * Applies to both the standard and the permissioned burn variant.
+     */
+    recordBackedProof?: RecordBackedProof;
 }): Promise<InstructionPlan> {
     const [mintDecoded, tokenDecoded] = await Promise.all([
         fetchMint(input.rpc, input.mint),
@@ -92,6 +107,15 @@ export async function createConfidentialBurnInstructionPlan(input: {
                 `both are required for confidential burn.`,
         );
     }
+    // The plan is a multi-transaction sequence: its proof-setup transactions run
+    // (and fund three rent-paying context-state accounts) before the burn itself
+    // reaches the chain. A mint mismatch caught only on-chain would therefore fail
+    // the burn *and* skip the cleanup transaction, stranding that rent.
+    if (tokenDecoded.data.mint !== input.mint) {
+        throw new Error(
+            `Token account ${input.tokenAccount} belongs to mint ${tokenDecoded.data.mint}, ` + `not ${input.mint}.`,
+        );
+    }
     if (!isConfidentialTransferAccount(tokenDecoded)) {
         throw new Error(
             `Token account ${input.tokenAccount} is not configured for confidential transfers ` +
@@ -106,6 +130,8 @@ export async function createConfidentialBurnInstructionPlan(input: {
 
     const amount = tokenAmountToRaw(input.amount, mintDecoded.data.decimals);
 
+    const authoritySigner = toAuthoritySigner(input.authority);
+
     const commonArgs = {
         rpc: input.rpc,
         payer: input.payer,
@@ -113,12 +139,17 @@ export async function createConfidentialBurnInstructionPlan(input: {
         mint: input.mint,
         mintAccount: mintDecoded.data,
         sourceTokenAccount: tokenDecoded.data,
-        authority: toAuthoritySigner(input.authority),
+        authority: authoritySigner,
         amount,
         sourceElgamalKeypair: input.keys.elgamal,
         aesKey: input.keys.aes,
         auditorElgamalPubkey: input.auditorElgamalPubkey,
     };
+
+    // Resolved once so the standard, permissioned and self-burn branches below all
+    // opt into the record-backed range proof identically.
+    const recordProofArgs =
+        input.recordBackedProof === undefined ? undefined : toRecordProofArgs(input.recordBackedProof);
 
     // On a PermissionedBurn mint the token-2022 program rejects the standard
     // burn variant (TokenError::InvalidInstruction) and requires the
@@ -140,12 +171,41 @@ export async function createConfidentialBurnInstructionPlan(input: {
                     `authority currently configured on the mint (it may have been rotated).`,
             );
         }
-        return getPermissionedConfidentialBurnInstructionPlan({
+        // Self-burn: the account owner is also the mint's configured burn
+        // authority, so both slots hold the same address. Kit refuses to sign a
+        // transaction that pairs a real signer with a noop signer for one address
+        // ("Multiple distinct signers were identified for address ..."), so
+        // collapse the two slots onto a single signer, preferring whichever side
+        // the caller supplied as a real signer.
+        if (providedAuthority.address === authoritySigner.address) {
+            const sharedAuthority = typeof input.authority === 'string' ? providedAuthority : authoritySigner;
+            const sharedArgs = {
+                ...commonArgs,
+                authority: sharedAuthority,
+                permissionedBurnAuthority: sharedAuthority,
+            };
+            if (recordProofArgs !== undefined) {
+                return getPermissionedConfidentialBurnWithRecordInstructionPlan({ ...sharedArgs, ...recordProofArgs });
+            }
+            return getPermissionedConfidentialBurnInstructionPlan(sharedArgs);
+        }
+
+        const permissionedArgs = {
             ...commonArgs,
             permissionedBurnAuthority: providedAuthority,
-        });
+        };
+        if (recordProofArgs !== undefined) {
+            return getPermissionedConfidentialBurnWithRecordInstructionPlan({
+                ...permissionedArgs,
+                ...recordProofArgs,
+            });
+        }
+        return getPermissionedConfidentialBurnInstructionPlan(permissionedArgs);
     }
 
+    if (recordProofArgs !== undefined) {
+        return getConfidentialBurnWithRecordInstructionPlan({ ...commonArgs, ...recordProofArgs });
+    }
     return getConfidentialBurnInstructionPlan(commonArgs);
 }
 
@@ -164,13 +224,13 @@ export async function createConfidentialBurnInstructionPlan(input: {
  * recommended form, since it makes the re-sync impossible to forget:
  *
  * ```ts
- * await step(
- *     createApplyConfidentialPendingBurnInstructionPlan({
- *         mint,
- *         authority: mintAuthority,
- *         resyncSupply: { supplyKeys, rawSupply: supplyAfterBurn },
- *     }),
- * );
+ * const applyBurn = await createApplyConfidentialPendingBurnInstructionPlan({
+ *     rpc,
+ *     mint,
+ *     authority: mintAuthority,
+ *     resyncSupply: { supplyKeys, rawSupply: supplyAfterBurn },
+ * });
+ * await step(applyBurn);
  * ```
  *
  * Omitting it returns the bare `ApplyPendingBurn` as a `singleInstructionPlan`,
@@ -178,7 +238,8 @@ export async function createConfidentialBurnInstructionPlan(input: {
  * {@link createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan} before
  * the next confidential mint.
  */
-export function createApplyConfidentialPendingBurnInstructionPlan(input: {
+export async function createApplyConfidentialPendingBurnInstructionPlan(input: {
+    rpc: Rpc<SolanaRpcApi>;
     /** The token mint (must carry `ConfidentialMintBurn`). */
     mint: Address;
     /** The mint authority. A bare address becomes a no-op signer. */
@@ -204,7 +265,13 @@ export function createApplyConfidentialPendingBurnInstructionPlan(input: {
          */
         rawSupply: bigint;
     };
-}): InstructionPlan {
+}): Promise<InstructionPlan> {
+    // Validates the mint carries `ConfidentialMintBurn` and — when resyncing —
+    // that the supply keys are the mint's registered ones, so a resync cannot
+    // silently re-encrypt under the wrong key and break every later confidential
+    // mint. Same guard the standalone supply builder applies.
+    await assertConfidentialSupplyKeysForMint(input.rpc, input.mint, input.resyncSupply?.supplyKeys);
+
     const applyPlan = singleInstructionPlan(
         getApplyConfidentialPendingBurnInstruction({
             mint: input.mint,
@@ -223,7 +290,7 @@ export function createApplyConfidentialPendingBurnInstructionPlan(input: {
     // later confidential mint fails on-chain with an opaque proof error.
     return nonDivisibleSequentialInstructionPlan([
         applyPlan,
-        createUpdateConfidentialMintBurnDecryptableSupplyInstructionPlan({
+        buildUpdateDecryptableSupplyPlan({
             mint: input.mint,
             authority: input.authority,
             supplyKeys: input.resyncSupply.supplyKeys,

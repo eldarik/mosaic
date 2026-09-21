@@ -7,7 +7,10 @@ import {
     type TransactionSigner,
 } from '@solana/kit';
 import { fetchMint, fetchToken } from '@solana-program/token-2022';
-import { getConfidentialMintInstructionPlan } from '@solana-program/token-2022/confidential';
+import {
+    getConfidentialMintInstructionPlan,
+    getConfidentialMintWithRecordInstructionPlan,
+} from '@solana-program/token-2022/confidential';
 import {
     getConfidentialMintBurnSupplyElgamalPubkey,
     isConfidentialMintBurn,
@@ -15,7 +18,13 @@ import {
     isConfidentialTransferMint,
 } from './extensions.js';
 import { assertConfidentialKeysMatchSupply, type ConfidentialKeys } from './keys.js';
-import { type TokenAmount, tokenAmountToRaw, toAuthoritySigner } from './util.js';
+import {
+    type RecordBackedProof,
+    type TokenAmount,
+    toRecordProofArgs,
+    tokenAmountToRaw,
+    toAuthoritySigner,
+} from './util.js';
 
 /**
  * Confidentially **mints** tokens directly into a confidential balance,
@@ -55,6 +64,12 @@ export async function createConfidentialMintInstructionPlan(input: {
     supplyKeys: ConfidentialKeys;
     /** Override the auditor pubkey; defaults to the mint's configured auditor. */
     auditorElgamalPubkey?: Address;
+    /**
+     * Stage the batched range proof in an SPL Record account instead of inline in
+     * the verify instruction data. Pass this (`{}` is enough) when sending with an
+     * executor that sets compute-unit limits — see {@link RecordBackedProof}.
+     */
+    recordBackedProof?: RecordBackedProof;
 }): Promise<InstructionPlan> {
     const [mintDecoded, destinationDecoded] = await Promise.all([
         fetchMint(input.rpc, input.mint),
@@ -77,6 +92,16 @@ export async function createConfidentialMintInstructionPlan(input: {
                 `both are required for confidential mint.`,
         );
     }
+    // The plan is a multi-transaction sequence: its proof-setup transactions run
+    // (and fund three rent-paying context-state accounts) before the mint itself
+    // reaches the chain. A mint mismatch caught only on-chain would therefore fail
+    // the mint *and* skip the cleanup transaction, stranding that rent.
+    if (destinationDecoded.data.mint !== input.mint) {
+        throw new Error(
+            `Token account ${input.destinationToken} belongs to mint ${destinationDecoded.data.mint}, ` +
+                `not ${input.mint}.`,
+        );
+    }
     if (!isConfidentialTransferAccount(destinationDecoded)) {
         throw new Error(
             `Token account ${input.destinationToken} is not configured for confidential transfers ` +
@@ -94,7 +119,7 @@ export async function createConfidentialMintInstructionPlan(input: {
 
     const amount = tokenAmountToRaw(input.amount, mintDecoded.data.decimals);
 
-    return getConfidentialMintInstructionPlan({
+    const args = {
         rpc: input.rpc,
         payer: input.payer,
         token: input.destinationToken,
@@ -106,5 +131,13 @@ export async function createConfidentialMintInstructionPlan(input: {
         supplyElgamalKeypair: input.supplyKeys.elgamal,
         supplyAesKey: input.supplyKeys.aes,
         auditorElgamalPubkey: input.auditorElgamalPubkey,
-    });
+    };
+
+    if (input.recordBackedProof !== undefined) {
+        return getConfidentialMintWithRecordInstructionPlan({
+            ...args,
+            ...toRecordProofArgs(input.recordBackedProof),
+        });
+    }
+    return getConfidentialMintInstructionPlan(args);
 }
