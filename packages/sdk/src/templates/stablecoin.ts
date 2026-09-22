@@ -103,20 +103,19 @@ export const createStablecoinInitTransaction = async (
         tokenBuilder = tokenBuilder.withConfidentialMintBurn(confidentialMintBurn);
     }
 
-    const instructions = await tokenBuilder
-        .buildInstructions({
-            rpc,
-            decimals,
-            mintAuthority: mintAuthoritySigner,
-            // On the sRFC-37 path the freeze authority MUST be the mint authority: the
-            // Token-ACL `create_config` instruction requires the mint's current freeze
-            // authority to equal its signer (the mint authority) and then reassigns it to
-            // the config PDA itself. Pre-setting it to anything else (e.g. the program id)
-            // fails create_config with InvalidAuthority.
-            freezeAuthority: useSrfc37 ? mintAuthorityAddress : freezeAuthority,
-            mint: mintSigner,
-            feePayer: feePayerSigner,
-        });
+    const instructions = await tokenBuilder.buildInstructions({
+        rpc,
+        decimals,
+        mintAuthority: mintAuthoritySigner,
+        // On the sRFC-37 path the freeze authority MUST be the mint authority: the
+        // Token-ACL `create_config` instruction requires the mint's current freeze
+        // authority to equal its signer (the mint authority) and then reassigns it to
+        // the config PDA itself. Pre-setting it to anything else (e.g. the program id)
+        // fails create_config with InvalidAuthority.
+        freezeAuthority: useSrfc37 ? mintAuthorityAddress : freezeAuthority,
+        mint: mintSigner,
+        feePayer: feePayerSigner,
+    });
 
     // 2. create mintConfig (Token ACL) - only if SRFC-37 is enabled
     if (!useSrfc37) {
