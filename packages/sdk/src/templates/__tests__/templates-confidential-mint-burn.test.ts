@@ -53,11 +53,21 @@ describe('templates confidential mint/burn passthrough', () => {
             name: 'custom-token',
             build: async mintBurn => {
                 const { createCustomTokenInitTransaction } = await import('../custom-token.js');
-                return createCustomTokenInitTransaction(rpc, 'Name', 'SYM', decimals, 'uri', mintAuthority, mint, feePayer, {
-                    enableConfidentialBalances: true,
-                    enableConfidentialMintBurn: mintBurn !== undefined,
-                    confidentialMintBurn: mintBurn,
-                });
+                return createCustomTokenInitTransaction(
+                    rpc,
+                    'Name',
+                    'SYM',
+                    decimals,
+                    'uri',
+                    mintAuthority,
+                    mint,
+                    feePayer,
+                    {
+                        enableConfidentialBalances: true,
+                        enableConfidentialMintBurn: mintBurn !== undefined,
+                        confidentialMintBurn: mintBurn,
+                    },
+                );
             },
         },
         {
@@ -134,6 +144,25 @@ describe('templates confidential mint/burn passthrough', () => {
                     enableConfidentialMintBurn: true,
                 }),
             ).rejects.toThrow('confidentialMintBurn is required when enableConfidentialMintBurn is set');
+        });
+
+        it('initializes the extension when init values are passed without the toggle', async () => {
+            const { createCustomTokenInitTransaction } = await import('../custom-token.js');
+            const { instructions } = await createCustomTokenInitTransaction(
+                rpc,
+                'Name',
+                'SYM',
+                decimals,
+                'uri',
+                mintAuthority,
+                mint,
+                feePayer,
+                {
+                    enableConfidentialBalances: true,
+                    confidentialMintBurn: MINT_BURN,
+                },
+            );
+            expect(countMintBurnInits(instructions)).toBe(1);
         });
 
         it('refuses mint/burn without confidential balances', async () => {

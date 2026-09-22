@@ -57,6 +57,8 @@ export const createCustomTokenInitTransaction = async (
         // Adds the ConfidentialMintBurn extension. Requires `enableConfidentialBalances`:
         // a mint-burn mint keeps its whole supply encrypted, so it needs the
         // ConfidentialTransferMint extension to hold that supply in accounts.
+        // Optional when `confidentialMintBurn` is supplied: passing the init values adds
+        // the extension on its own, as in stablecoin.ts / tokenized-security.ts.
         enableConfidentialMintBurn?: boolean;
         enableScaledUiAmount?: boolean;
         enableSrfc37?: boolean;
@@ -92,9 +94,10 @@ export const createCustomTokenInitTransaction = async (
         // `enableConfidentialBalances` is truthy).
         confidentialBalances?: ConfidentialBalancesConfig;
 
-        // Confidential Mint/Burn init values (required when `enableConfidentialMintBurn`
-        // is truthy). Both come from the supply authority's own wallet keys — see
-        // `getConfidentialMintBurnInit` in `@solana/mosaic-sdk/confidential`.
+        // Confidential Mint/Burn init values. Supplying them adds the ConfidentialMintBurn
+        // extension whether or not `enableConfidentialMintBurn` is set, and they are
+        // required when it is set. Both come from the supply authority's own wallet keys —
+        // see `getConfidentialMintBurnInit` in `@solana/mosaic-sdk/confidential`.
         confidentialMintBurn?: ConfidentialMintBurnOptions;
 
         // Freeze authority.
@@ -198,13 +201,18 @@ export const createCustomTokenInitTransaction = async (
     // Add Confidential Mint/Burn extension. Must follow the confidential-balances
     // block above: `withConfidentialMintBurn` refuses to run before
     // `ConfidentialTransferMint` is on the builder.
-    if (options?.enableConfidentialMintBurn) {
-        if (!options.confidentialMintBurn) {
+    //
+    // The init values alone enable the extension, matching stablecoin.ts /
+    // tokenized-security.ts: a mint extension cannot be added after initialization, so
+    // silently dropping supplied values would hand back an irreversibly wrong mint.
+    const confidentialMintBurn = options?.confidentialMintBurn;
+    if (options?.enableConfidentialMintBurn || confidentialMintBurn) {
+        if (!confidentialMintBurn) {
             throw new Error(
                 'confidentialMintBurn is required when enableConfidentialMintBurn is set: the supply ElGamal pubkey and the initial decryptable supply are derived from the supply authority wallet (see getConfidentialMintBurnInit).',
             );
         }
-        tokenBuilder = tokenBuilder.withConfidentialMintBurn(options.confidentialMintBurn);
+        tokenBuilder = tokenBuilder.withConfidentialMintBurn(confidentialMintBurn);
     }
 
     // Add Scaled UI Amount extension
