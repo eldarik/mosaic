@@ -47,7 +47,7 @@ import {
     removeAddressFromAllowlist,
 } from '@/features/token-management/lib/access-list';
 import { Address, createSolanaRpc, Rpc, SolanaRpcApi } from '@solana/kit';
-import { getList, getListConfigPda, getTokenExtensions } from '@solana/mosaic-sdk';
+import { getList, getListConfigPda, getTokenDashboardData, getTokenExtensions } from '@solana/mosaic-sdk';
 import { Mode } from '@solana/token-acl-gate-sdk';
 import { buildAddressExplorerUrl } from '@/lib/solana/explorer';
 import { getTokenAuthorities } from '@/lib/solana/rpc';
@@ -152,6 +152,9 @@ function ManageTokenConnected({ address }: { address: string }) {
         const addTokenExtensionsToFoundToken = async (foundToken: TokenDisplay): Promise<void> => {
             if (!rpc) return;
 
+            // Live on-chain extension rates, fetched in parallel; a failure keeps the persisted values
+            const dashboardDataPromise = getTokenDashboardData(rpc, foundToken.address as Address).catch(() => null);
+
             try {
                 const extensions = await getTokenExtensions(rpc, foundToken.address as Address);
                 foundToken.extensions = extensions;
@@ -175,6 +178,17 @@ function ManageTokenConnected({ address }: { address: string }) {
                 } catch {
                     // If authority fetch fails, continue with existing token data
                     // Authorities may not be available if token doesn't exist on this network
+                }
+
+                const dashboardData = await dashboardDataPromise;
+                if (dashboardData) {
+                    foundToken.transferFeeBasisPoints = dashboardData.transferFeeBasisPoints;
+                    foundToken.transferFeeMaximum = dashboardData.transferFeeMaximum;
+                    foundToken.interestRate = dashboardData.interestRate;
+                    foundToken.scaledUiMultiplier = dashboardData.multiplier;
+                    foundToken.scaledUiNewMultiplier = dashboardData.scaledUiNewMultiplier;
+                    foundToken.scaledUiNewMultiplierEffectiveTimestamp =
+                        dashboardData.scaledUiNewMultiplierEffectiveTimestamp;
                 }
 
                 setToken(foundToken);

@@ -22,6 +22,13 @@ export interface TokenDisplay {
     confidentialBalancesAuthority?: string;
     permanentDelegateAuthority?: string;
     scaledUiAmountAuthority?: string;
+    // On-chain extension rates. Numbers and decimal strings only: this is persisted as JSON.
+    transferFeeBasisPoints?: number;
+    transferFeeMaximum?: string; // raw base units
+    interestRate?: number; // basis points
+    scaledUiMultiplier?: number;
+    scaledUiNewMultiplier?: number;
+    scaledUiNewMultiplierEffectiveTimestamp?: string; // Unix seconds, '0' = nothing scheduled
     extensions?: string[];
     transactionSignature?: string;
     createdAt?: string;
