@@ -1,5 +1,6 @@
 import {
     type Address,
+    type Commitment,
     type GetMinimumBalanceForRentExemptionApi,
     type InstructionPlan,
     type Rpc,
@@ -67,11 +68,20 @@ export async function createConfidentialTransferInstructionPlan(input: {
      * executor that sets compute-unit limits — see {@link RecordBackedProof}.
      */
     recordBackedProof?: RecordBackedProof;
+    /**
+     * Commitment for reading the mint and both token accounts. Defaults to the
+     * RPC's own default (usually `finalized`). Pass `confirmed` when the source's
+     * balance was just changed by a transaction you confirmed yourself — the
+     * proofs are built from the balance read here, so a stale read builds a
+     * transfer the chain rejects.
+     */
+    commitment?: Commitment;
 }): Promise<InstructionPlan> {
+    const fetchConfig = input.commitment ? { commitment: input.commitment } : undefined;
     const [mintDecoded, sourceDecoded, destinationDecoded] = await Promise.all([
-        fetchMint(input.rpc, input.mint),
-        fetchToken(input.rpc, input.sourceToken),
-        fetchToken(input.rpc, input.destinationToken),
+        fetchMint(input.rpc, input.mint, fetchConfig),
+        fetchToken(input.rpc, input.sourceToken, fetchConfig),
+        fetchToken(input.rpc, input.destinationToken, fetchConfig),
     ]);
 
     // Fail fast with actionable messages rather than letting the upstream

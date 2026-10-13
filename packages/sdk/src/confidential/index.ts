@@ -44,6 +44,18 @@ export { createConfidentialWithdrawInstructionPlan } from './withdraw.js';
 
 export { createConfidentialTransferInstructionPlan } from './transfer.js';
 
+export {
+    checkConfidentialRecipient,
+    createConfidentialSendPreparationInstructionPlan,
+    getConfidentialSendPreparationStatus,
+    ConfidentialSendError,
+    type ConfidentialSendErrorCode,
+    type ConfidentialSendPreparation,
+    type ConfidentialSendPreparationStatus,
+    type ConfidentialRecipientStatus,
+    type ConfidentialRecipientNotReadyReason,
+} from './send.js';
+
 export { createEmptyConfidentialAccountInstructionPlan } from './empty-account.js';
 
 export { createConfidentialMintInstructionPlan } from './mint.js';
