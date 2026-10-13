@@ -448,6 +448,14 @@ function ManageTokenConnected({ address }: { address: string }) {
 
                         <div className="flex space-x-2">
                             {hasConfidentialBalances && (
+                                <Link href={`/confidential/${address}/send`}>
+                                    <Button size="sm" variant="secondary" className="bg-primary/5 hover:bg-primary/10">
+                                        <Send className="h-4 w-4 mr-1.5 text-primary/60" />
+                                        Send privately
+                                    </Button>
+                                </Link>
+                            )}
+                            {hasConfidentialBalances && (
                                 <Link href={`/confidential/${address}`}>
                                     <Button size="sm" variant="secondary" className="bg-primary/5 hover:bg-primary/10">
                                         <Lock className="h-4 w-4 mr-1.5 text-primary/60" />

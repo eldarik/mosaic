@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ChevronLeft, Lock } from 'lucide-react';
+import { ChevronLeft, Lock, Send } from 'lucide-react';
 import type { Address } from '@solana/kit';
 import { useConnector } from '@solana/connector/react';
 import { Button } from '@/components/ui/button';
@@ -54,6 +54,12 @@ function ConfidentialConnected({ address }: { address: string }) {
                             <p className="text-md text-muted-foreground -mt-1">{token?.symbol ?? address}</p>
                         </div>
                     </div>
+                    <Link href={`/confidential/${address}/send`}>
+                        <Button size="sm" variant="secondary" className="bg-primary/5 hover:bg-primary/10">
+                            <Send className="h-4 w-4 mr-1.5 text-primary/60" />
+                            Quick send
+                        </Button>
+                    </Link>
                 </div>
 
                 {/* Intro */}

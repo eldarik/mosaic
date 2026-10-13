@@ -3,10 +3,16 @@ import {
     type Rpc,
     type Signature,
     type SolanaRpcApi,
+    type Transaction,
     type TransactionSigner,
+    compileTransaction,
     flattenTransactionPlan,
     getBase64EncodedWireTransaction,
     getSignatureFromTransaction,
+    getSignersFromTransactionMessage,
+    isTransactionModifyingSigner,
+    isTransactionPartialSigner,
+    partiallySignTransactionWithSigners,
     setTransactionMessageLifetimeUsingBlockhash,
     signTransactionMessageWithSigners,
 } from '@solana/kit';
@@ -59,8 +65,31 @@ const TRANSIENT =
 const V1_UNSUPPORTED =
     /unsupported (transaction|message) version|unknown (transaction|message) version|transaction version .* not supported|failed to deserialize|loadedAccountsDataSize/i;
 
+// The user declining the wallet prompt. Never a reason to fall back: re-planning
+// at version 0 would just put a second prompt in front of someone who said no.
+const USER_REJECTED = /user (rejected|denied|declined|cancell?ed)|rejected the request/i;
+
 /**
- * Every message in an error's `cause` chain, joined.
+ * An error and everything it wraps, outermost first.
+ *
+ * Kit wraps via the standard `cause`; `@solana/connector` wraps via its own
+ * `originalError` instead — a failed wallet signature surfaces as "Failed to
+ * sign transaction 1 of 1" wrapping "Failed to sign transaction" wrapping the
+ * wallet's actual error — so both links are followed.
+ */
+function errorChain(err: unknown): Error[] {
+    const chain: Error[] = [];
+    let current: unknown = err;
+    // Bounded: a malformed `cause` graph could otherwise cycle forever.
+    for (let depth = 0; current instanceof Error && depth < 8; depth++) {
+        chain.push(current);
+        current = current.cause ?? (current as { originalError?: unknown }).originalError;
+    }
+    return chain;
+}
+
+/**
+ * Every message in an error's chain (see {@link errorChain}), joined.
  *
  * Kit wraps the real failure: a 429 from `simulateTransaction` surfaces as
  * `SolanaError: Failed to estimate the compute unit consumption for this
@@ -70,14 +99,24 @@ const V1_UNSUPPORTED =
  * to version 0 — so every classifier below reads the whole chain.
  */
 function messageChain(err: unknown): string {
-    const parts: string[] = [];
-    let current: unknown = err;
-    // Bounded: a malformed `cause` graph could otherwise cycle forever.
-    for (let depth = 0; current instanceof Error && depth < 8; depth++) {
-        parts.push(current.message);
-        current = current.cause;
-    }
-    return parts.join(' | ');
+    return errorChain(err)
+        .map(e => e.message)
+        .join(' | ');
+}
+
+/**
+ * Whether the wallet failed to sign for a reason other than the user declining.
+ *
+ * On a version-1 attempt this is treated as the wallet not handling the format:
+ * a wallet can list `1` in `supportedTransactionVersions` and still fail on the
+ * wire bytes, and nothing has been sent at that point, so re-planning at
+ * version 0 is safe.
+ */
+function isWalletSigningFailure(err: unknown): boolean {
+    const chain = errorChain(err);
+    const codes = chain.map(e => (e as { code?: unknown }).code);
+    if (codes.includes('USER_REJECTED') || USER_REJECTED.test(messageChain(err))) return false;
+    return codes.includes('SIGNING_FAILED');
 }
 
 /** Runs an RPC call, retrying on HTTP 429 with exponential backoff. */
@@ -164,6 +203,160 @@ async function signSendConfirm(
 export type ConfidentialPlanProgress = (current: number, total: number) => void;
 
 /**
+ * How the plan's transactions reach the wallet.
+ *
+ * - `each` — one wallet prompt per transaction, each signed right before it is
+ *   sent with a fresh blockhash. The default.
+ * - `batch` — every transaction signed up front in a single wallet prompt
+ *   (`signAllTransactions`), then sent in order. A plan of N transactions costs
+ *   one prompt instead of N. If the shared blockhash expires before the last one
+ *   lands, the rest are re-signed in another single prompt.
+ *
+ * `batch` needs a wallet signer that can sign several transactions at once (a
+ * kit `TransactionModifyingSigner`, which is what `useConnectorSigner` returns),
+ * and at version 1 a single-transaction plan: a version-1 message's resource
+ * limits are simulated just before signing, and a later transaction cannot be
+ * simulated before the earlier ones it depends on have landed. Anything else
+ * runs as `each`.
+ */
+export type ConfidentialPlanSigning = 'each' | 'batch';
+
+const BATCH_CONFIRM_TIMEOUT_MS = 120_000;
+const MAX_REBATCHES = 2;
+
+/**
+ * Sends already-signed transactions in order, waiting for each to confirm
+ * before sending the next — later transactions read accounts earlier ones
+ * create. Returns how many landed: fewer than `signed.length` only when the
+ * shared blockhash expired with transaction `[returned]` provably not landed,
+ * so the caller can re-sign the rest.
+ */
+async function sendSignedInOrder(
+    rpc: Rpc<SolanaRpcApi>,
+    signed: Transaction[],
+    blockhash: Parameters<typeof setTransactionMessageLifetimeUsingBlockhash>[0]['blockhash'],
+    onSent: (signature: Signature) => void,
+    onProgress: () => void,
+): Promise<number> {
+    for (let i = 0; i < signed.length; i++) {
+        onProgress();
+        const signature = getSignatureFromTransaction(signed[i]);
+        const wire = getBase64EncodedWireTransaction(signed[i]);
+        const deadline = Date.now() + BATCH_CONFIRM_TIMEOUT_MS;
+        let polls = 0;
+        let landed = false;
+        while (!landed) {
+            if (Date.now() > deadline) throw new Error(`Transaction ${signature} not confirmed within 120s`);
+            // Re-broadcasting the same signed bytes is idempotent, and covers a
+            // send dropped by a lagging node; at most every 5th poll.
+            if (polls % 5 === 0) {
+                await withBackoff('sendTransaction', () =>
+                    rpc.sendTransaction(wire, { encoding: 'base64', skipPreflight: true }).send(),
+                );
+            }
+            await sleep(1_000);
+            const status = await withBackoff('getSignatureStatuses', () =>
+                rpc.getSignatureStatuses([signature]).send(),
+            );
+            const entry = status.value[0];
+            if (entry?.err)
+                throw new Error(
+                    `Transaction ${signature} failed: ${JSON.stringify(entry.err, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))}`,
+                );
+            if (entry?.confirmationStatus === 'confirmed' || entry?.confirmationStatus === 'finalized') {
+                landed = true;
+                break;
+            }
+            polls++;
+            // Once the blockhash is no longer valid this transaction can never
+            // land, so it is safe to re-sign it (and the rest) with a fresh one.
+            if (polls % 5 === 0) {
+                const { value: valid } = await withBackoff('isBlockhashValid', () =>
+                    rpc.isBlockhashValid(blockhash, { commitment: 'confirmed' }).send(),
+                );
+                if (!valid) {
+                    const final = await withBackoff('getSignatureStatuses', () =>
+                        rpc.getSignatureStatuses([signature]).send(),
+                    );
+                    if (final.value[0]?.err) throw new Error(`Transaction ${signature} failed`);
+                    if (final.value[0]) {
+                        landed = true;
+                        break;
+                    }
+                    return i;
+                }
+            }
+        }
+        onSent(signature);
+    }
+    return signed.length;
+}
+
+/**
+ * Signs `messages` in one wallet prompt and sends them in order (see
+ * {@link ConfidentialPlanSigning}). The wallet signs first — a modifying signer
+ * may change the bytes — then each message's other signers (the ephemeral
+ * proof context-state keypairs) add their signatures locally.
+ */
+async function signAndSendBatch(input: {
+    rpc: Rpc<SolanaRpcApi>;
+    messages: unknown[];
+    wallet: TransactionSigner;
+    version: ConfidentialTxVersion;
+    estimateResourceLimits: EstimateResourceLimits;
+    signatures: Signature[];
+    total: number;
+    onProgress?: ConfidentialPlanProgress;
+    onAwaitingSignature?: () => void;
+}): Promise<void> {
+    const { rpc, wallet } = input;
+    if (!isTransactionModifyingSigner(wallet)) throw new Error('Batch signing needs a transaction-modifying signer.');
+
+    let remaining = input.messages;
+    for (let round = 0; remaining.length > 0; round++) {
+        if (round > MAX_REBATCHES) throw new Error('The transaction blockhash kept expiring before confirmation.');
+
+        const { value: bh } = await withBackoff('getLatestBlockhash', () => rpc.getLatestBlockhash().send());
+        const messages = await Promise.all(
+            remaining.map(async base => {
+                const withLifetime = setTransactionMessageLifetimeUsingBlockhash(
+                    bh,
+                    base as Parameters<typeof setTransactionMessageLifetimeUsingBlockhash>[1],
+                ) as FullTransaction;
+                // Only reached with a single message at version 1; see ConfidentialPlanSigning.
+                return input.version === 1
+                    ? withBackoff('estimateResourceLimits', () =>
+                          input.estimateResourceLimits({ rpc, transactionMessage: withLifetime }),
+                      )
+                    : withLifetime;
+            }),
+        );
+
+        input.onAwaitingSignature?.();
+        const walletSigned = await wallet.modifyAndSignTransactions(messages.map(m => compileTransaction(m)));
+        const signed = await Promise.all(
+            walletSigned.map((tx, i) =>
+                partiallySignTransactionWithSigners(
+                    getSignersFromTransactionMessage(messages[i])
+                        .filter(s => s.address !== wallet.address)
+                        .filter(isTransactionPartialSigner),
+                    tx,
+                ),
+            ),
+        );
+
+        const landed = await sendSignedInOrder(
+            rpc,
+            signed,
+            bh.blockhash,
+            signature => input.signatures.push(signature),
+            () => input.onProgress?.(input.signatures.length + 1, input.total),
+        );
+        remaining = remaining.slice(landed);
+    }
+}
+
+/**
  * Plans a confidential `InstructionPlan` into fee-payer-bound transaction
  * messages, then signs, sends, and confirms each in order — returning every
  * signature. `onProgress` fires before each transaction so multi-tx proof flows
@@ -182,6 +375,10 @@ export async function executeConfidentialPlan(input: {
     onProgress?: ConfidentialPlanProgress;
     /** Transaction format to plan into. Defaults to `0`. */
     version?: ConfidentialTxVersion;
+    /** See {@link ConfidentialPlanSigning}. Defaults to `each`. */
+    signing?: ConfidentialPlanSigning;
+    /** Fires right before a batch is handed to the wallet (`batch` signing only). */
+    onAwaitingSignature?: () => void;
 }): Promise<Signature[]> {
     // Lazy import: pulls in the @solana/zk-sdk WASM dependency only when a
     // confidential operation actually runs.
@@ -195,6 +392,25 @@ export async function executeConfidentialPlan(input: {
             version,
         });
         const messages = flattenTransactionPlan(plan).map(single => single.message);
+
+        const batch =
+            input.signing === 'batch' &&
+            isTransactionModifyingSigner(input.feePayer) &&
+            (version === 0 || messages.length === 1);
+        if (batch) {
+            await signAndSendBatch({
+                rpc: input.rpc,
+                messages,
+                wallet: input.feePayer,
+                version,
+                estimateResourceLimits,
+                signatures,
+                total: messages.length,
+                onProgress: input.onProgress,
+                onAwaitingSignature: input.onAwaitingSignature,
+            });
+            return signatures;
+        }
 
         for (let i = 0; i < messages.length; i++) {
             input.onProgress?.(i + 1, messages.length);
@@ -211,7 +427,13 @@ export async function executeConfidentialPlan(input: {
         if (version !== 1 || signatures.length > 0) throw err;
 
         const message = messageChain(err);
-        if (V1_UNSUPPORTED.test(message)) return run(0, signatures);
+        if (V1_UNSUPPORTED.test(message) || isWalletSigningFailure(err)) {
+            // Logged so the wallet's own wording can be read off the console
+            // and, if it is a format rejection, folded into V1_UNSUPPORTED.
+            // eslint-disable-next-line no-console
+            console.warn(`Version-1 confidential transaction rejected; retrying at version 0: ${message}`);
+            return run(0, signatures);
+        }
 
         // A version-1 attempt that failed before anything landed, in a way
         // V1_UNSUPPORTED does not recognise. It may still be a wallet or node

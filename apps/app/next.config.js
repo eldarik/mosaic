@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     transpilePackages: ['@solana/mosaic-sdk'],
+    // Hosts other than localhost (e.g. a remote dev box reached over a VPN)
+    // that may load dev resources. Comma-separated, set in `.env.local`.
+    allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS?.split(',').map(origin => origin.trim()),
     // `@solana-program/token-2022` (pulled in via `@solana/mosaic-sdk`) does a
     // top-level `import { ... } from '@solana/zk-sdk/bundler'`, dragging a
     // 2.6 MB `.wasm` confidential-transfer crypto module into BOTH the client

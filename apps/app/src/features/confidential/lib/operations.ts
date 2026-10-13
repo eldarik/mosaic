@@ -1,5 +1,6 @@
 import {
     type Address,
+    type Commitment,
     type GetMinimumBalanceForRentExemptionApi,
     type InstructionPlan,
     type Rpc,
@@ -7,7 +8,12 @@ import {
     type TransactionSigner,
 } from '@solana/kit';
 import { fetchMint, findAssociatedTokenPda, TOKEN_2022_PROGRAM_ADDRESS } from '@solana-program/token-2022';
-import type { ConfidentialKeys } from '@solana/mosaic-sdk/confidential';
+import type {
+    ConfidentialKeys,
+    ConfidentialRecipientStatus,
+    ConfidentialSendPreparation,
+    ConfidentialSendPreparationStatus,
+} from '@solana/mosaic-sdk/confidential';
 
 /**
  * Thin, typed wrappers over the `@solana/mosaic-sdk/confidential` instruction-plan
@@ -129,6 +135,7 @@ export async function buildTransferPlan(input: {
     amount: string;
     keys: ConfidentialKeys;
     auditorElgamalPubkey?: Address;
+    commitment?: Commitment;
 }): Promise<InstructionPlan> {
     const { createConfidentialTransferInstructionPlan } = await import('@solana/mosaic-sdk/confidential');
     return createConfidentialTransferInstructionPlan(input);
@@ -156,4 +163,36 @@ export async function buildEmptyPlan(input: {
 }): Promise<InstructionPlan> {
     const { createEmptyConfidentialAccountInstructionPlan } = await import('@solana/mosaic-sdk/confidential');
     return createEmptyConfidentialAccountInstructionPlan(input);
+}
+
+/** Whether `recipient` can receive a confidential transfer of `mint` right now (no signing). */
+export async function checkRecipient(input: {
+    rpc: Rpc<SolanaRpcApi>;
+    mint: Address;
+    recipient: Address;
+}): Promise<ConfidentialRecipientStatus> {
+    const { checkConfidentialRecipient } = await import('@solana/mosaic-sdk/confidential');
+    return checkConfidentialRecipient(input);
+}
+
+/** Configure / approve / deposit / apply — everything a send needs before the transfer, as one plan. */
+export async function buildSendPreparation(input: {
+    rpc: RpcWithRent;
+    payer: TransactionSigner;
+    owner: TransactionSigner;
+    mint: Address;
+    amount: string;
+    keys: ConfidentialKeys;
+}): Promise<ConfidentialSendPreparation> {
+    const { createConfidentialSendPreparationInstructionPlan } = await import('@solana/mosaic-sdk/confidential');
+    return createConfidentialSendPreparationInstructionPlan(input);
+}
+
+/** Whether a sent preparation is visible on chain yet (see `getConfidentialSendPreparationStatus`). */
+export async function fetchSendPreparationStatus(input: {
+    rpc: Rpc<SolanaRpcApi>;
+    preparation: ConfidentialSendPreparation;
+}): Promise<ConfidentialSendPreparationStatus> {
+    const { getConfidentialSendPreparationStatus } = await import('@solana/mosaic-sdk/confidential');
+    return getConfidentialSendPreparationStatus(input);
 }

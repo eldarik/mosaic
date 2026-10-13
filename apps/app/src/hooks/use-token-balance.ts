@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useConnector } from '@solana/connector/react';
 import { useTokenAccountStore, useTokenAccountState } from '@/stores/token-account-store';
 
@@ -47,11 +47,13 @@ export function useTokenBalance(mintAddress: string | undefined): UseTokenBalanc
         }
     }, [walletAddress, mintAddress, rpcUrl, accountState.lastFetched, fetchTokenAccount]);
 
-    const refetch = () => {
+    // Stable identity: callers list it in effect deps, and a fresh function per
+    // render would re-run those effects on every store update the fetch causes.
+    const refetch = useCallback(() => {
         if (walletAddress && mintAddress && rpcUrl) {
             refetchTokenAccount(walletAddress, mintAddress, rpcUrl);
         }
-    };
+    }, [walletAddress, mintAddress, rpcUrl, refetchTokenAccount]);
 
     return {
         balance: accountState.balance,
