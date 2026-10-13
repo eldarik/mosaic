@@ -68,6 +68,9 @@
             "@solana-program/system": "0.14.1",
             "@solana-program/token-2022": "0.18.0",
             "@solana/zk-sdk": "0.5.2"
+        },
+        "patchedDependencies": {
+            "@solana/connector@0.1.4": "patches/@solana__connector@0.1.4.patch"
         }
     }
 }

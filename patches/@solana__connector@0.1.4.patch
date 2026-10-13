@@ -1,0 +1,75 @@
+diff --git a/dist/chunk-CLXM6UEE.js b/dist/chunk-CLXM6UEE.js
+index b515582be5db328c6c8190f6ccfe872a1fe54504..24b0895e75b6b138e2d101ccaa12e73a9d57966f 100644
+--- a/dist/chunk-CLXM6UEE.js
++++ b/dist/chunk-CLXM6UEE.js
+@@ -2112,7 +2112,7 @@ function createTransactionSigner(config) {
+     async signTransaction(transaction) {
+       if (!capabilities.canSign)
+         throw Errors.featureNotSupported("transaction signing");
+-      let validation = TransactionValidator.validate(transaction);
++      let validation = TransactionValidator.validate(transaction, { maxSize: transaction instanceof Uint8Array && transaction[0] === 0x81 ? 4096 : void 0 });
+       if (!validation.valid)
+         throw logger9.error("Transaction validation failed", { errors: validation.errors }), Errors.invalidTransaction(validation.errors.join(", "));
+       validation.warnings.length > 0 && logger9.warn("Transaction validation warnings", { warnings: validation.warnings });
+@@ -2366,7 +2366,7 @@ function createKitTransactionSigner(connectorSigner) {
+     address: signerAddress,
+     async modifyAndSignTransactions(transactions$1) {
+       let transactionData = transactions$1.map((tx) => {
+-        let messageBytes = new Uint8Array(tx.messageBytes), numSigners = Object.keys(tx.signatures).length, wireFormat = createTransactionBytesForSigning(messageBytes, numSigners);
++        let messageBytes = new Uint8Array(tx.messageBytes), numSigners = Object.keys(tx.signatures).length, wireFormat = new Uint8Array(transactions.getTransactionEncoder().encode(tx));
+         return logger10.debug("Preparing wire format for wallet", {
+           signerAddress,
+           messageBytesLength: messageBytes.length,
+@@ -2419,7 +2419,9 @@ function createKitTransactionSigner(connectorSigner) {
+               signatures: Object.keys(walletTransaction.signatures)
+             }), transactions.assertIsTransactionWithinSizeLimit(result), result;
+           }
+-          let extractedSignatureBytes = extractSignature(signedTxBytes), signatureBase58 = codecs.getBase58Decoder().decode(extractedSignatureBytes);
++          let extractedSignatureBytes = transactions.getTransactionDecoder().decode(signedTxBytes).signatures[signerAddress];
++          if (!extractedSignatureBytes) throw new Error("Wallet did not sign for " + signerAddress);
++          let signatureBase58 = codecs.getBase58Decoder().decode(extractedSignatureBytes);
+           logger10.debug("Extracted signature from wallet (unmodified)", {
+             signerAddress,
+             signatureLength: extractedSignatureBytes.length,
+diff --git a/dist/chunk-YTCSTE3Q.mjs b/dist/chunk-YTCSTE3Q.mjs
+index 2f10a06bf64ffdb5ca606d8d350110db96896e68..5fe451506033e611f79c7daa829f11b941d2304d 100644
+--- a/dist/chunk-YTCSTE3Q.mjs
++++ b/dist/chunk-YTCSTE3Q.mjs
+@@ -3,7 +3,7 @@ import { Component, useTransition, useState, useCallback, useMemo } from 'react'
+ import { jsx, jsxs } from 'react/jsx-runtime';
+ import { install } from '@solana/webcrypto-ed25519-polyfill';
+ import { address, isAddress } from '@solana/addresses';
+-import { getTransactionDecoder, assertIsTransactionWithinSizeLimit } from '@solana/transactions';
++import { getTransactionDecoder, getTransactionEncoder, assertIsTransactionWithinSizeLimit } from '@solana/transactions';
+ import { getBase58Decoder } from '@solana/codecs';
+ 
+ // src/lib/adapters/wallet-standard-shim.ts
+@@ -2110,7 +2110,7 @@ function createTransactionSigner(config) {
+     async signTransaction(transaction) {
+       if (!capabilities.canSign)
+         throw Errors.featureNotSupported("transaction signing");
+-      let validation = TransactionValidator.validate(transaction);
++      let validation = TransactionValidator.validate(transaction, { maxSize: transaction instanceof Uint8Array && transaction[0] === 0x81 ? 4096 : void 0 });
+       if (!validation.valid)
+         throw logger9.error("Transaction validation failed", { errors: validation.errors }), Errors.invalidTransaction(validation.errors.join(", "));
+       validation.warnings.length > 0 && logger9.warn("Transaction validation warnings", { warnings: validation.warnings });
+@@ -2364,7 +2364,7 @@ function createKitTransactionSigner(connectorSigner) {
+     address: signerAddress,
+     async modifyAndSignTransactions(transactions) {
+       let transactionData = transactions.map((tx) => {
+-        let messageBytes = new Uint8Array(tx.messageBytes), numSigners = Object.keys(tx.signatures).length, wireFormat = createTransactionBytesForSigning(messageBytes, numSigners);
++        let messageBytes = new Uint8Array(tx.messageBytes), numSigners = Object.keys(tx.signatures).length, wireFormat = new Uint8Array(getTransactionEncoder().encode(tx));
+         return logger10.debug("Preparing wire format for wallet", {
+           signerAddress,
+           messageBytesLength: messageBytes.length,
+@@ -2417,7 +2417,9 @@ function createKitTransactionSigner(connectorSigner) {
+               signatures: Object.keys(walletTransaction.signatures)
+             }), assertIsTransactionWithinSizeLimit(result), result;
+           }
+-          let extractedSignatureBytes = extractSignature(signedTxBytes), signatureBase58 = getBase58Decoder().decode(extractedSignatureBytes);
++          let extractedSignatureBytes = getTransactionDecoder().decode(signedTxBytes).signatures[signerAddress];
++          if (!extractedSignatureBytes) throw new Error("Wallet did not sign for " + signerAddress);
++          let signatureBase58 = getBase58Decoder().decode(extractedSignatureBytes);
+           logger10.debug("Extracted signature from wallet (unmodified)", {
+             signerAddress,
+             signatureLength: extractedSignatureBytes.length,
